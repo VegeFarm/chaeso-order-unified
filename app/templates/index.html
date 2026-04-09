@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>채소팜 통합 처리기</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; max-width: 820px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 24px; }
+    h1 { margin-top: 0; }
+    label { display: block; margin: 14px 0 6px; font-weight: 700; }
+    input[type=file] { width: 100%; }
+    button { margin-top: 18px; padding: 12px 18px; border: 0; border-radius: 10px; cursor: pointer; }
+    pre { background: #f6f6f6; padding: 16px; border-radius: 10px; white-space: pre-wrap; }
+    .note { background: #faf7e8; padding: 12px 14px; border-radius: 10px; margin: 14px 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>{{ app_name }}</h1>
+    <p>거래명세서 HTML은 필수이고, 주문내역 파일은 선택입니다.</p>
+    <ul>
+      <li>거래명세서 HTML만 업로드: {{ item_sheet }} 기준으로 날짜 시트만 반영</li>
+      <li>거래명세서 HTML + 주문내역 업로드: 날짜 시트 반영 + {{ match_sheet }} 기준 주문대조 + {{ price_sheet }} 기준 가격계산 + 텔레그램 전송</li>
+    </ul>
+
+    <div class="note">
+      주문내역 파일을 올리지 않으면 시트 반영만 진행되고, 텔레그램 전송은 하지 않습니다.
+    </div>
+
+    <form id="upload-form">
+      <label for="html_file">거래명세서 HTML (필수)</label>
+      <input id="html_file" name="html_file" type="file" accept=".html,.htm" required>
+
+      <label for="order_file">주문내역 TXT 또는 CSV (선택)</label>
+      <input id="order_file" name="order_file" type="file" accept=".txt,.csv">
+
+      <button type="submit">업로드 후 실행</button>
+    </form>
+
+    <h3>처리 결과</h3>
+    <pre id="result">아직 실행 전입니다.</pre>
+  </div>
+
+  <script>
+    const form = document.getElementById('upload-form');
+    const result = document.getElementById('result');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(form);
+      result.textContent = '업로드 중...';
+
+      try {
+        const response = await fetch('/upload', { method: 'POST', body: formData });
+        const data = await response.json();
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        result.textContent = '오류: ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>
