@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: veg-unified-fastapi
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: SPREADSHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: ITEM_SETTINGS_SHEET_NAME
+        value: 품목설정
+      - key: MATCH_RULES_SHEET_NAME
+        value: 주문대조설정
+      - key: PRICE_RULES_SHEET_NAME
+        value: 가격설정
+      - key: TEMPLATE_SHEET_NAME
+        value: 템플릿
+      - key: MAX_UPLOAD_MB
+        value: "15"
