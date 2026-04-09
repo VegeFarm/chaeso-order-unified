@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from app.config import get_settings
 from app.services.pipeline import process_uploaded_files
 
-app = FastAPI(title="채소팜 통합 처리기", version="1.2.0")
+app = FastAPI(title="채소팜 주문수량확인", version="1.2.0")
 templates = Jinja2Templates(directory="app/templates")
 
 
