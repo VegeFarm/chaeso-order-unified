@@ -156,7 +156,8 @@ def _build_item_value_map(worksheet, item_aliases: list[str], value_aliases: lis
 
         cleaned = raw_value.replace(",", "")
         try:
-            item_value_map[item_name] = _round_half_up_to_int(cleaned)
+            rounded_value = _round_half_up_to_int(cleaned)
+            item_value_map[item_name] = max(0, rounded_value)
         except Exception:
             item_value_map[item_name] = 0
 
