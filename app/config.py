@@ -14,6 +14,7 @@ class Settings:
     telegram_bot_token: str
     telegram_chat_id: str
     max_upload_mb: int
+    business_timezone: str
 
 
 def _load_service_account_info() -> dict:
@@ -41,4 +42,5 @@ def get_settings() -> Settings:
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "15")),
+        business_timezone=os.getenv("BUSINESS_TIMEZONE", "Asia/Seoul").strip() or "Asia/Seoul",
     )

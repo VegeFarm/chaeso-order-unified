@@ -85,10 +85,10 @@ async def upload_files(
     background_tasks.add_task(_run_job, job_dir, html_bytes, order_bytes)
 
     if order_attached:
-        message = "업로드가 접수되었습니다. 템플릿 시트를 복사해 날짜 시트를 맞추고, 입고열만 반영한 뒤 주문대조/가격계산을 진행하여 텔레그램으로 요약 메시지를 보냅니다."
+        message = "업로드가 접수되었습니다. 자동 대상 시트가 없으면 생성하고, 토요일은 일요일 날짜로 보정하며, 새 시트는 직전 최신 시트의 남은 수량을 재고열에 반올림해 채운 뒤 입고 반영/주문대조/가격계산을 진행합니다."
         mode = "full"
     else:
-        message = "업로드가 접수되었습니다. 템플릿 시트를 복사해 날짜 시트를 맞추고, 거래명세서 수량만 집계해서 입고열에 반영합니다."
+        message = "업로드가 접수되었습니다. 자동 대상 시트가 없으면 생성하고, 토요일은 일요일 날짜로 보정하며, 새 시트는 직전 최신 시트의 남은 수량을 재고열에 반올림해 채운 뒤 거래명세서 수량을 입고열에 반영합니다."
         mode = "sheet_only"
 
     return JSONResponse(

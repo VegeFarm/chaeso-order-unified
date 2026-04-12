@@ -1,9 +1,10 @@
 import json
 import re
-from datetime import datetime
 from typing import Any
 
 from bs4 import BeautifulSoup
+
+from app.services.business_dates import format_sheet_title_from_business_date, resolve_business_date
 
 
 class HtmlStatementError(Exception):
@@ -31,25 +32,13 @@ def read_statement_data_from_html_bytes(html_bytes: bytes) -> dict[str, Any]:
         raise HtmlStatementError("statement JSON 파싱에 실패했습니다.") from exc
 
 
-def parse_business_date(statement_data: dict[str, Any]) -> str:
+def parse_business_date(statement_data: dict[str, Any], timezone_str: str = "Asia/Seoul") -> str:
     raw_date = str(statement_data.get("slip", {}).get("date", "")).strip()
-    if not raw_date:
-        return datetime.now().strftime("%Y-%m-%d")
-
-    digits = re.sub(r"[^0-9]", "", raw_date)
-    if len(digits) >= 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-
-    return raw_date
+    return resolve_business_date(raw_date, timezone_str)
 
 
 def format_sheet_title(business_date: str) -> str:
-    digits = re.sub(r"[^0-9]", "", business_date)
-    if len(digits) >= 8:
-        month = int(digits[4:6])
-        day = digits[6:8]
-        return f"{month}.{day}"
-    return business_date
+    return format_sheet_title_from_business_date(business_date)
 
 
 def build_receipt_rows(statement_data: dict[str, Any]) -> list[dict[str, Any]]:

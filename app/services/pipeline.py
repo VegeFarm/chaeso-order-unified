@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.config import get_settings
-from app.services.google_sheets import update_daily_sheet
+from app.services.google_sheets import ensure_today_sheet, update_daily_sheet
 from app.services.html_parser import (
     build_receipt_items,
     build_receipt_rows,
@@ -25,10 +25,12 @@ def process_uploaded_files(job_dir: str, html_bytes: bytes, order_bytes: bytes |
     work_dir = Path(job_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    today_sheet_result = ensure_today_sheet(settings)
+
     statement_data = read_statement_data_from_html_bytes(html_bytes)
     receipt_rows = build_receipt_rows(statement_data)
     receipt_items = build_receipt_items(receipt_rows)
-    business_date = parse_business_date(statement_data)
+    business_date = parse_business_date(statement_data, settings.business_timezone)
     sheet_title = format_sheet_title(business_date)
 
     sheet_result = update_daily_sheet(settings, sheet_title, business_date, receipt_rows)
@@ -37,6 +39,7 @@ def process_uploaded_files(job_dir: str, html_bytes: bytes, order_bytes: bytes |
         "mode": "sheet_only",
         "business_date": business_date,
         "sheet_title": sheet_title,
+        "today_sheet_result": today_sheet_result,
         "sheet_result": sheet_result,
         "match_count": 0,
         "price_count": 0,

@@ -27,3 +27,32 @@ services:
         value: 템플릿
       - key: MAX_UPLOAD_MB
         value: "15"
+      - key: BUSINESS_TIMEZONE
+        value: Asia/Seoul
+
+  - type: cron
+    name: veg-daily-sheet-cron
+    runtime: python
+    plan: starter
+    region: singapore
+    schedule: "1 15 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.cron_daily_sheet
+    autoDeployTrigger: commit
+    envVars:
+      - key: SPREADSHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: ITEM_SETTINGS_SHEET_NAME
+        value: 품목설정
+      - key: MATCH_RULES_SHEET_NAME
+        value: 주문대조설정
+      - key: PRICE_RULES_SHEET_NAME
+        value: 가격설정
+      - key: TEMPLATE_SHEET_NAME
+        value: 템플릿
+      - key: MAX_UPLOAD_MB
+        value: "15"
+      - key: BUSINESS_TIMEZONE
+        value: Asia/Seoul
