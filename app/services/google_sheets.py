@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from gspread.exceptions import WorksheetNotFound
 
 from app.services.business_dates import resolve_auto_sheet_date
-from app.services.rules_loader import load_item_name_map
+from app.services.rules_loader import load_item_settings
 from app.services.sheets_client import open_spreadsheet
 from app.utils.text import normalize_name
 
@@ -39,12 +39,32 @@ def _round_half_up_to_int(value: Any) -> int:
     return int(number.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def _build_transformed_qty_map(receipt_rows: list[dict[str, Any]], name_map: dict[str, str]) -> dict[str, float]:
+def _normalize_receipt_unit(unit: str) -> str:
+    normalized = normalize_name(unit).upper()
+    if normalized in {"EA", "개"}:
+        return "EA"
+    if normalized in {"BOX", "박스"}:
+        return "BOX"
+    if normalized in {"PACK", "팩"}:
+        return "팩"
+    if normalized == "KG":
+        return "KG"
+    return normalized
+
+
+def _build_transformed_qty_map(receipt_rows: list[dict[str, Any]], item_settings: dict[str, dict[str, Any]]) -> dict[str, float]:
     qty_map: dict[str, float] = defaultdict(float)
     for row in receipt_rows:
         original = str(row["name"])
-        transformed = name_map.get(normalize_name(original), original)
-        qty_map[transformed] += float(row["quantity"])
+        original_key = normalize_name(original)
+        item_config = item_settings.get(original_key, {})
+        transformed = str(item_config.get("transformed_name") or original).strip()
+
+        unit = _normalize_receipt_unit(str(row.get("unit", "")))
+        unit_multipliers = item_config.get("unit_multipliers", {}) or {}
+        multiplier = float(unit_multipliers.get(unit, item_config.get("default_multiplier", 1.0) or 1.0))
+
+        qty_map[transformed] += float(row["quantity"]) * multiplier
     return dict(qty_map)
 
 
@@ -241,7 +261,7 @@ def _get_or_create_target_sheet(spreadsheet, settings, sheet_title: str, busines
             ) from exc
 
 
-def _write_qty_only_to_template_layout(worksheet, receipt_rows: list[dict[str, Any]], name_map: dict[str, str]):
+def _write_qty_only_to_template_layout(worksheet, receipt_rows: list[dict[str, Any]], item_settings: dict[str, dict[str, Any]]):
     headers = worksheet.row_values(1)
     if not headers:
         raise SheetUpdateError("템플릿 시트 1행에서 헤더를 찾지 못했습니다.")
@@ -256,7 +276,7 @@ def _write_qty_only_to_template_layout(worksheet, receipt_rows: list[dict[str, A
     if len(all_values) <= 1:
         raise SheetUpdateError("템플릿 시트에 품목 데이터가 없습니다.")
 
-    qty_map = _build_transformed_qty_map(receipt_rows, name_map)
+    qty_map = _build_transformed_qty_map(receipt_rows, item_settings)
     data_rows = all_values[1:]
 
     existing_index_by_item: dict[str, int] = {}
@@ -320,9 +340,9 @@ def ensure_today_sheet(settings) -> dict[str, Any]:
 
 def update_daily_sheet(settings, sheet_title: str, business_date: str, receipt_rows: list[dict[str, Any]]):
     spreadsheet = open_spreadsheet(settings)
-    name_map = load_item_name_map(settings)
+    item_settings = load_item_settings(settings)
     worksheet, create_mode, seed_result = _get_or_create_target_sheet(spreadsheet, settings, sheet_title, business_date)
-    result = _write_qty_only_to_template_layout(worksheet, receipt_rows, name_map)
+    result = _write_qty_only_to_template_layout(worksheet, receipt_rows, item_settings)
     result["create_mode"] = create_mode
     result["business_date"] = business_date
     result.update(seed_result)
