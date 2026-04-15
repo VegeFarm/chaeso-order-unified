@@ -1,6 +1,6 @@
 from collections import defaultdict
 from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 import re
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -34,9 +34,9 @@ def _coerce_number(value: float) -> int | float:
     return int(round(value)) if value.is_integer() else value
 
 
-def _round_half_up_to_int(value: Any) -> int:
-    number = Decimal(str(value or 0))
-    return int(number.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+def _parse_sheet_number_preserve_value(value: Any) -> int | float:
+    number = Decimal(str(value or 0).replace(",", ""))
+    return int(number) if number == number.to_integral_value() else float(number)
 
 
 def _normalize_receipt_unit(unit: str) -> str:
@@ -149,7 +149,7 @@ def _find_latest_previous_sheet(spreadsheet, settings, target_sheet_title: str, 
     return candidates[-1][1]
 
 
-def _build_item_value_map(worksheet, item_aliases: list[str], value_aliases: list[str]) -> dict[str, int]:
+def _build_item_value_map(worksheet, item_aliases: list[str], value_aliases: list[str]) -> dict[str, int | float]:
     headers = worksheet.row_values(1)
     if not headers:
         return {}
@@ -163,7 +163,7 @@ def _build_item_value_map(worksheet, item_aliases: list[str], value_aliases: lis
     if len(values) <= 1:
         return {}
 
-    item_value_map: dict[str, int] = {}
+    item_value_map: dict[str, int | float] = {}
     for row in values[1:]:
         item_name = row[item_col - 1].strip() if len(row) >= item_col else ""
         if not item_name:
@@ -174,10 +174,9 @@ def _build_item_value_map(worksheet, item_aliases: list[str], value_aliases: lis
             item_value_map[item_name] = 0
             continue
 
-        cleaned = raw_value.replace(",", "")
         try:
-            rounded_value = _round_half_up_to_int(cleaned)
-            item_value_map[item_name] = max(0, rounded_value)
+            parsed_value = _parse_sheet_number_preserve_value(raw_value)
+            item_value_map[item_name] = max(0, parsed_value)
         except Exception:
             item_value_map[item_name] = 0
 
