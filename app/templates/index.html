@@ -22,12 +22,11 @@
     <ul>
       <li>날짜 시트가 없으면 <strong>{{ template_sheet }}</strong> 시트를 복사해서 새 시트를 만듭니다.</li>
       <li>시트 반영은 거래명세서 전체 상세내역을 쓰지 않고, {{ item_sheet }} 기준으로 묶은 <strong>입고 수량만 입고열</strong>에 반영합니다.</li>
-      <li>자정 실행 시 재고 셀 노트에 <strong>최근 3일 입고분 + 4일 이상 재고</strong>를 갱신하고, 오래된 날짜 시트는 자동 정리합니다.</li>
       <li>주문내역 파일까지 올리면 {{ match_sheet }} 기준 주문대조 + {{ price_sheet }} 기준 가격계산 후 <strong>텔레그램 요약 메시지만</strong> 전송합니다.</li>
     </ul>
 
     <div class="note">
-      주문내역 파일을 올리지 않으면 시트 반영만 진행되고, 텔레그램 전송은 하지 않습니다. 숨김 시트 <strong>재고나이집계</strong>가 자동 생성됩니다.
+      주문내역 파일을 올리지 않으면 시트 반영만 진행되고, 텔레그램 전송은 하지 않습니다.
     </div>
 
     <form id="upload-form">
