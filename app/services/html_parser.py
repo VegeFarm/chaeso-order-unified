@@ -20,16 +20,29 @@ def read_statement_data_from_html_bytes(html_bytes: bytes) -> dict[str, Any]:
     soup = BeautifulSoup(html_text, "html.parser")
     input_tag = soup.find("input", {"name": "statement"})
     if not input_tag:
-        raise HtmlStatementError("HTML 파일에서 name='statement' 값을 찾지 못했습니다.")
+        raise HtmlStatementError("HTML 안에서 name='statement' 값을 찾지 못했습니다. 렌더링 완료된 거래명세서 HTML인지 확인해 주세요.")
 
     raw_value = input_tag.get("value", "")
     if not raw_value:
         raise HtmlStatementError("statement 값이 비어 있습니다.")
 
     try:
-        return json.loads(raw_value)
+        statement_data = json.loads(raw_value)
     except json.JSONDecodeError as exc:
         raise HtmlStatementError("statement JSON 파싱에 실패했습니다.") from exc
+
+    validate_statement_data(statement_data)
+    return statement_data
+
+
+def validate_statement_data(statement_data: dict[str, Any]) -> None:
+    raw_date = str(statement_data.get("slip", {}).get("date", "")).strip()
+    if not raw_date:
+        raise HtmlStatementError("거래명세서 안에서 거래일자를 찾지 못했습니다.")
+
+    receipt_rows = build_receipt_rows(statement_data)
+    if not receipt_rows:
+        raise HtmlStatementError("거래명세서 안에서 품목 행을 1개 이상 찾지 못했습니다.")
 
 
 def parse_business_date(statement_data: dict[str, Any], timezone_str: str = "Asia/Seoul") -> str:

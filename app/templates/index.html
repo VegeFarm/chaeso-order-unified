@@ -9,16 +9,18 @@
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 24px; }
     h1 { margin-top: 0; }
     label { display: block; margin: 14px 0 6px; font-weight: 700; }
-    input[type=file] { width: 100%; }
+    input[type=file], input[type=url] { width: 100%; box-sizing: border-box; }
+    input[type=url] { padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; }
     button { margin-top: 18px; padding: 12px 18px; border: 0; border-radius: 10px; cursor: pointer; }
     pre { background: #f6f6f6; padding: 16px; border-radius: 10px; white-space: pre-wrap; }
     .note { background: #faf7e8; padding: 12px 14px; border-radius: 10px; margin: 14px 0; }
+    .help { color: #666; font-size: 13px; margin-top: 4px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>{{ app_name }}</h1>
-    <p>거래명세서 HTML은 필수이고, 주문내역 파일은 선택입니다.</p>
+    <p>거래명세서 HTML 파일을 올리거나, 마켓봄 거래명세서 링크를 붙여넣어 실행할 수 있습니다. 주문내역 파일은 선택입니다.</p>
     <ul>
       <li>날짜 시트가 없으면 <strong>{{ template_sheet }}</strong> 시트를 복사해서 새 시트를 만듭니다.</li>
       <li>시트 반영은 거래명세서 전체 상세내역을 쓰지 않고, {{ item_sheet }} 기준으로 묶은 <strong>입고 수량만 입고열</strong>에 반영합니다.</li>
@@ -26,12 +28,18 @@
     </ul>
 
     <div class="note">
-      주문내역 파일을 올리지 않으면 시트 반영만 진행되고, 텔레그램 전송은 하지 않습니다.
+      주문내역 파일을 올리지 않으면 시트 반영만 진행되고, 텔레그램 전송은 하지 않습니다.<br>
+      링크와 HTML 파일을 둘 다 넣으면 링크를 우선 사용합니다.
     </div>
 
     <form id="upload-form">
-      <label for="html_file">거래명세서 HTML (필수)</label>
-      <input id="html_file" name="html_file" type="file" accept=".html,.htm" required>
+      <label for="statement_url">거래명세서 링크 (선택)</label>
+      <input id="statement_url" name="statement_url" type="url" placeholder="https://wholesalesales.marketbom.com/statement/...">
+      <div class="help">마켓봄 /statement/ 링크만 허용됩니다.</div>
+
+      <label for="html_file">거래명세서 HTML 파일 (선택)</label>
+      <input id="html_file" name="html_file" type="file" accept=".html,.htm">
+      <div class="help">링크를 입력하지 않을 때만 사용됩니다.</div>
 
       <label for="order_file">주문내역 TXT 또는 CSV (선택)</label>
       <input id="order_file" name="order_file" type="file" accept=".txt,.csv">
@@ -50,7 +58,15 @@
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const formData = new FormData(form);
-      result.textContent = '업로드 중...';
+      const statementUrl = (formData.get('statement_url') || '').trim();
+      const htmlFile = formData.get('html_file');
+
+      if (!statementUrl && (!htmlFile || !htmlFile.name)) {
+        result.textContent = '오류: 거래명세서 링크를 입력하거나 HTML 파일을 올려 주세요.';
+        return;
+      }
+
+      result.textContent = statementUrl ? '거래명세서 링크 확인 중...' : '업로드 중...';
 
       try {
         const response = await fetch('/upload', { method: 'POST', body: formData });
