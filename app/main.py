@@ -9,9 +9,15 @@ from fastapi.templating import Jinja2Templates
 from app.config import get_settings
 from app.services.html_parser import HtmlStatementError, read_statement_data_from_html_bytes
 from app.services.pipeline import process_uploaded_files
+from app.services.purchase_records import (
+    PurchaseRecordError,
+    apply_product_renames,
+    reprocess_unregistered_items,
+    setup_purchase_workbook,
+)
 from app.services.statement_fetcher import StatementFetchError, fetch_statement_html_from_url
 
-app = FastAPI(title="채소팜 주문수량확인", version="1.3.0")
+app = FastAPI(title="채소팜 통합 처리기", version="1.4.0")
 templates = Jinja2Templates(directory="app/templates")
 
 
@@ -55,6 +61,8 @@ def home(request: Request):
         "index.html",
         {
             "app_name": app.title,
+            "inventory_sheet_configured": bool(settings.spreadsheet_id),
+            "purchase_sheet_configured": bool(settings.purchase_spreadsheet_id),
             "item_sheet": settings.item_settings_sheet_name,
             "match_sheet": settings.match_rules_sheet_name,
             "price_sheet": settings.price_rules_sheet_name,
@@ -116,10 +124,16 @@ async def upload_files(
     source_text = "거래명세서 링크" if source == "url" else "거래명세서 HTML 파일"
 
     if order_attached:
-        message = f"{source_text} 처리가 접수되었습니다. 자동 대상 시트가 없으면 생성하고, 토요일은 일요일 날짜로 보정하며, 새 시트는 직전 최신 시트의 남은 수량을 재고열에 반영한 뒤 입고 반영/주문대조/가격계산을 진행합니다."
+        message = (
+            f"{source_text} 처리가 접수되었습니다. 재고파악 시트에는 기존 입고/주문대조/가격계산을 진행하고, "
+            "매입단가 시트에는 품목환산표 기준으로 매입기록을 입력합니다."
+        )
         mode = "full"
     else:
-        message = f"{source_text} 처리가 접수되었습니다. 자동 대상 시트가 없으면 생성하고, 토요일은 일요일 날짜로 보정하며, 새 시트는 직전 최신 시트의 남은 수량을 재고열에 반영한 뒤 거래명세서 수량을 입고열에 반영합니다."
+        message = (
+            f"{source_text} 처리가 접수되었습니다. 재고파악 시트에는 거래명세서 수량을 입고열에 반영하고, "
+            "매입단가 시트에는 품목환산표 기준으로 매입기록을 입력합니다."
+        )
         mode = "sheet_only"
 
     return JSONResponse(
@@ -130,10 +144,46 @@ async def upload_files(
             "source": source,
             "message": message,
             "sheets": {
-                "item_settings": settings.item_settings_sheet_name,
-                "match_rules": settings.match_rules_sheet_name,
-                "price_rules": settings.price_rules_sheet_name,
-                "template": settings.template_sheet_name,
+                "재고파악_시트": {
+                    "template": settings.template_sheet_name,
+                    "item_settings": settings.item_settings_sheet_name,
+                    "match_rules": settings.match_rules_sheet_name,
+                    "price_rules": settings.price_rules_sheet_name,
+                },
+                "매입단가_시트": {
+                    "configured": bool(settings.purchase_spreadsheet_id),
+                    "required_env": "PURCHASE_SPREADSHEET_ID",
+                },
             },
         }
     )
+
+
+@app.post("/purchase/setup")
+def purchase_setup():
+    settings = get_settings()
+    try:
+        result = setup_purchase_workbook(settings)
+    except PurchaseRecordError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(result)
+
+
+@app.post("/purchase/reprocess-unregistered")
+def purchase_reprocess_unregistered():
+    settings = get_settings()
+    try:
+        result = reprocess_unregistered_items(settings)
+    except PurchaseRecordError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(result)
+
+
+@app.post("/purchase/apply-renames")
+def purchase_apply_renames():
+    settings = get_settings()
+    try:
+        result = apply_product_renames(settings)
+    except PurchaseRecordError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(result)

@@ -5,55 +5,99 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>채소팜 통합 처리기</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 40px; max-width: 860px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 24px; }
-    h1 { margin-top: 0; }
+    body { font-family: Arial, sans-serif; margin: 40px; max-width: 920px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 24px; margin-bottom: 18px; }
+    h1, h2 { margin-top: 0; }
     label { display: block; margin: 14px 0 6px; font-weight: 700; }
     input[type=file], input[type=url] { width: 100%; box-sizing: border-box; }
     input[type=url] { padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; }
     button { margin-top: 18px; padding: 12px 18px; border: 0; border-radius: 10px; cursor: pointer; }
+    button + button { margin-left: 8px; }
     pre { background: #f6f6f6; padding: 16px; border-radius: 10px; white-space: pre-wrap; }
     .note { background: #faf7e8; padding: 12px 14px; border-radius: 10px; margin: 14px 0; }
     .help { color: #666; font-size: 13px; margin-top: 4px; }
+    .status { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 12px; background: #eee; }
+    .ok { background: #e5f7e9; }
+    .warn { background: #fff1cf; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>{{ app_name }}</h1>
-    <p>거래명세서 HTML 파일을 올리거나, 마켓봄 거래명세서 링크를 붙여넣어 실행할 수 있습니다. 주문내역 파일은 선택입니다.</p>
+    <p>
+      거래명세서 링크 또는 HTML 파일을 넣으면 기존 <strong>재고파악 시트</strong> 반영과 함께,
+      별도 <strong>매입단가 시트</strong>에도 매입기록을 입력합니다.
+    </p>
+    <p>
+      재고파악 시트 <span class="status ok">설정됨</span>
+      &nbsp; 매입단가 시트
+      {% if purchase_sheet_configured %}
+        <span class="status ok">설정됨</span>
+      {% else %}
+        <span class="status warn">PURCHASE_SPREADSHEET_ID 필요</span>
+      {% endif %}
+    </p>
+
     <ul>
-      <li>날짜 시트가 없으면 <strong>{{ template_sheet }}</strong> 시트를 복사해서 새 시트를 만듭니다.</li>
-      <li>시트 반영은 거래명세서 전체 상세내역을 쓰지 않고, {{ item_sheet }} 기준으로 묶은 <strong>입고 수량만 입고열</strong>에 반영합니다.</li>
-      <li>주문내역 파일까지 올리면 {{ match_sheet }} 기준 주문대조 + {{ price_sheet }} 기준 가격계산 후 <strong>텔레그램 요약 메시지만</strong> 전송합니다.</li>
+      <li>재고파악 시트: 날짜 시트가 없으면 <strong>{{ template_sheet }}</strong> 시트를 복사해서 새 시트를 만듭니다.</li>
+      <li>재고파악 시트: {{ item_sheet }} 기준으로 묶은 <strong>입고 수량만 입고열</strong>에 반영합니다.</li>
+      <li>매입단가 시트: <strong>품목환산표</strong> 기준으로 원본품명을 변환품명으로 바꾸고, 매입기록에 입력합니다.</li>
+      <li>주문내역 파일까지 올리면 {{ match_sheet }} 기준 주문대조 + {{ price_sheet }} 기준 가격계산 후 텔레그램 요약 메시지를 전송합니다.</li>
     </ul>
 
     <div class="note">
-      주문내역 파일을 올리지 않으면 시트 반영만 진행되고, 텔레그램 전송은 하지 않습니다.<br>
-      링크와 HTML 파일을 둘 다 넣으면 링크를 우선 사용합니다.
+      링크와 HTML 파일을 둘 다 넣으면 링크를 우선 사용합니다.<br>
+      매입단가 시트에는 <strong>매입기록, 품목환산표, 원물단가표, 미등록상품, 상품명변경, 전표관리, 전표상세관리</strong> 시트가 사용됩니다.
     </div>
 
     <form id="upload-form">
-      <label for="statement_url">거래명세서 링크 (선택)</label>
+      <label for="statement_url">거래명세서 링크</label>
       <input id="statement_url" name="statement_url" type="url" placeholder="https://wholesalesales.marketbom.com/statement/...">
       <div class="help">마켓봄 /statement/ 링크만 허용됩니다.</div>
 
-      <label for="html_file">거래명세서 HTML 파일 (선택)</label>
+      <label for="html_file">거래명세서 HTML 파일</label>
       <input id="html_file" name="html_file" type="file" accept=".html,.htm">
-      <div class="help">링크를 입력하지 않을 때만 사용됩니다.</div>
+      <div class="help">링크가 없을 때만 사용됩니다. HTML 파일로 실행해도 매입단가 시트에 입력됩니다.</div>
 
       <label for="order_file">주문내역 TXT 또는 CSV (선택)</label>
       <input id="order_file" name="order_file" type="file" accept=".txt,.csv">
 
       <button type="submit">업로드 후 실행</button>
     </form>
+  </div>
 
-    <h3>처리 결과</h3>
+  <div class="card">
+    <h2>매입단가 시트 관리</h2>
+    <p>품목환산표를 등록한 뒤 미등록상품을 다시 처리하거나, 상품명변경 시트에 적은 변경을 매입기록에 반영합니다.</p>
+    <button type="button" id="setup-purchase">매입단가 시트 기본 구성 확인</button>
+    <button type="button" id="reprocess-unregistered">미등록상품 재처리</button>
+    <button type="button" id="apply-renames">상품명 일괄변경 실행</button>
+  </div>
+
+  <div class="card">
+    <h2>처리 결과</h2>
     <pre id="result">아직 실행 전입니다.</pre>
   </div>
 
   <script>
     const form = document.getElementById('upload-form');
     const result = document.getElementById('result');
+
+    async function postJson(url, pendingText) {
+      result.textContent = pendingText;
+      try {
+        const response = await fetch(url, { method: 'POST' });
+        const text = await response.text();
+        try {
+          const data = JSON.parse(text);
+          result.textContent = JSON.stringify(data, null, 2);
+        } catch {
+          result.textContent = `오류 (${response.status})\n` + text;
+        }
+      } catch (err) {
+        result.textContent = '오류: ' + err.message;
+      }
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -81,6 +125,18 @@
       } catch (err) {
         result.textContent = '오류: ' + err.message;
       }
+    });
+
+    document.getElementById('setup-purchase').addEventListener('click', () => {
+      postJson('/purchase/setup', '매입단가 시트 기본 구성 확인 중...');
+    });
+
+    document.getElementById('reprocess-unregistered').addEventListener('click', () => {
+      postJson('/purchase/reprocess-unregistered', '미등록상품 재처리 중...');
+    });
+
+    document.getElementById('apply-renames').addEventListener('click', () => {
+      postJson('/purchase/apply-renames', '상품명 일괄변경 실행 중...');
     });
   </script>
 </body>

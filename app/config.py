@@ -5,7 +5,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Settings:
+    # 재고파악 시트
     spreadsheet_id: str
+    # 매입단가 시트
+    purchase_spreadsheet_id: str
     google_service_account_info: dict
     item_settings_sheet_name: str
     match_rules_sheet_name: str
@@ -30,10 +33,11 @@ def _load_service_account_info() -> dict:
 def get_settings() -> Settings:
     spreadsheet_id = os.getenv("SPREADSHEET_ID", "").strip()
     if not spreadsheet_id:
-        raise RuntimeError("SPREADSHEET_ID 환경변수가 비어 있습니다.")
+        raise RuntimeError("SPREADSHEET_ID 환경변수가 비어 있습니다. 재고파악 시트 ID를 설정해 주세요.")
 
     return Settings(
         spreadsheet_id=spreadsheet_id,
+        purchase_spreadsheet_id=os.getenv("PURCHASE_SPREADSHEET_ID", "").strip(),
         google_service_account_info=_load_service_account_info(),
         item_settings_sheet_name=os.getenv("ITEM_SETTINGS_SHEET_NAME", "품목설정").strip() or "품목설정",
         match_rules_sheet_name=os.getenv("MATCH_RULES_SHEET_NAME", "주문대조설정").strip() or "주문대조설정",

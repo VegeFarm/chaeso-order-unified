@@ -20,3 +20,8 @@ def get_gspread_client(settings: Settings) -> gspread.Client:
 def open_spreadsheet(settings: Settings):
     client = get_gspread_client(settings)
     return client.open_by_key(settings.spreadsheet_id)
+
+
+def open_spreadsheet_by_id(settings: Settings, spreadsheet_id: str):
+    client = get_gspread_client(settings)
+    return client.open_by_key(spreadsheet_id)

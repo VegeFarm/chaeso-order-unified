@@ -16,6 +16,7 @@ from app.services.order_compare import (
     parse_order_lines,
     read_order_text,
 )
+from app.services.purchase_records import process_purchase_statement
 from app.services.rules_loader import load_match_rules, load_price_rules
 from app.services.telegram_sender import send_message
 
@@ -35,12 +36,22 @@ def process_uploaded_files(job_dir: str, html_bytes: bytes, order_bytes: bytes |
 
     sheet_result = update_daily_sheet(settings, sheet_title, business_date, receipt_rows)
 
+    try:
+        purchase_result = process_purchase_statement(settings, statement_data, receipt_rows)
+    except Exception as exc:
+        purchase_result = {
+            "ok": False,
+            "enabled": bool(settings.purchase_spreadsheet_id),
+            "error": str(exc),
+        }
+
     result = {
         "mode": "sheet_only",
         "business_date": business_date,
         "sheet_title": sheet_title,
         "today_sheet_result": today_sheet_result,
         "sheet_result": sheet_result,
+        "purchase_result": purchase_result,
         "match_count": 0,
         "price_count": 0,
     }
