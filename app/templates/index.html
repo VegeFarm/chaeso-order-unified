@@ -69,9 +69,9 @@
   <div class="card">
     <h2>매입단가 시트 관리</h2>
     <p>품목환산표를 등록한 뒤 미등록상품을 다시 처리하거나, 상품명변경 시트에 적은 변경을 매입기록에 반영합니다.</p>
-    <button type="button" id="setup-purchase">매입단가 시트 기본 구성 확인</button>
     <button type="button" id="reprocess-unregistered">미등록상품 재처리</button>
     <button type="button" id="apply-renames">상품명 일괄변경 실행</button>
+    <button type="button" id="setup-purchase">매입단가 시트 만들기</button>
   </div>
 
   <div class="card">
@@ -128,7 +128,7 @@
     });
 
     document.getElementById('setup-purchase').addEventListener('click', () => {
-      postJson('/purchase/setup', '매입단가 시트 기본 구성 확인 중...');
+      postJson('/purchase/setup', '매입단가 시트 만드는 중...');
     });
 
     document.getElementById('reprocess-unregistered').addEventListener('click', () => {

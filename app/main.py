@@ -167,7 +167,7 @@ def purchase_setup():
     except PurchaseRecordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"매입단가 시트 기본 구성 중 오류: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"매입단가 시트 만들기 중 오류: {exc}") from exc
     return JSONResponse(result)
 
 
