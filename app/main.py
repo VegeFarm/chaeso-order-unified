@@ -166,6 +166,8 @@ def purchase_setup():
         result = setup_purchase_workbook(settings)
     except PurchaseRecordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"매입단가 시트 기본 구성 중 오류: {exc}") from exc
     return JSONResponse(result)
 
 
@@ -176,6 +178,8 @@ def purchase_reprocess_unregistered():
         result = reprocess_unregistered_items(settings)
     except PurchaseRecordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"미등록상품 재처리 중 오류: {exc}") from exc
     return JSONResponse(result)
 
 
@@ -186,4 +190,6 @@ def purchase_apply_renames():
         result = apply_product_renames(settings)
     except PurchaseRecordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"상품명 일괄변경 중 오류: {exc}") from exc
     return JSONResponse(result)

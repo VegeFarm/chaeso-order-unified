@@ -109,10 +109,20 @@ def _open_purchase_spreadsheet(settings: Settings):
 
 
 def _get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: int = 1000, cols: int | None = None):
+    required_cols = cols or max(len(headers), 8)
     try:
         ws = spreadsheet.worksheet(title)
     except WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=title, rows=rows, cols=cols or max(len(headers), 8))
+        ws = spreadsheet.add_worksheet(title=title, rows=rows, cols=required_cols)
+
+    # 기존 시트가 이미 있어도 이후 수식/검색 영역에서 필요한 열 수보다 작으면
+    # Google Sheets API가 "범위 초과" 오류를 내므로 먼저 안전하게 확장한다.
+    try:
+        if ws.row_count < rows or ws.col_count < required_cols:
+            ws.resize(rows=max(ws.row_count, rows), cols=max(ws.col_count, required_cols))
+    except Exception:
+        # resize 실패 시 이후 update에서 구체적인 오류가 표시되도록 둔다.
+        pass
 
     current_headers = ws.row_values(1)
     if current_headers[: len(headers)] != headers:
@@ -150,7 +160,7 @@ def _ensure_purchase_workbook(spreadsheet) -> dict[str, Any]:
     worksheets = {
         PURCHASE_RECORD_SHEET: _get_or_create_worksheet(spreadsheet, PURCHASE_RECORD_SHEET, PURCHASE_RECORD_HEADERS),
         CONVERSION_SHEET: _get_or_create_worksheet(spreadsheet, CONVERSION_SHEET, CONVERSION_HEADERS),
-        UNIT_PRICE_SHEET: _get_or_create_worksheet(spreadsheet, UNIT_PRICE_SHEET, UNIT_PRICE_HEADERS, rows=1000, cols=10),
+        UNIT_PRICE_SHEET: _get_or_create_worksheet(spreadsheet, UNIT_PRICE_SHEET, UNIT_PRICE_HEADERS, rows=1000, cols=16),
         UNREGISTERED_SHEET: _get_or_create_worksheet(spreadsheet, UNREGISTERED_SHEET, UNREGISTERED_HEADERS),
         RENAME_SHEET: _get_or_create_worksheet(spreadsheet, RENAME_SHEET, RENAME_HEADERS),
         SLIP_HISTORY_SHEET: _get_or_create_worksheet(spreadsheet, SLIP_HISTORY_SHEET, SLIP_HISTORY_HEADERS),
