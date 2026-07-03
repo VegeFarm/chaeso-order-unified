@@ -12,6 +12,7 @@ from app.services.pipeline import process_uploaded_files
 from app.services.purchase_records import (
     PurchaseRecordError,
     apply_product_renames,
+    delete_purchase_records,
     reprocess_unregistered_items,
 )
 from app.services.statement_fetcher import StatementFetchError, fetch_statement_html_from_url
@@ -163,4 +164,19 @@ def purchase_apply_renames():
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"상품명 일괄변경 중 오류: {exc}") from exc
+    return JSONResponse(result)
+
+
+@app.post("/purchase/delete-records")
+def purchase_delete_records(
+    delete_date: str = Form(""),
+    delete_product: str = Form(""),
+):
+    settings = get_settings()
+    try:
+        result = delete_purchase_records(settings, delete_date, delete_product)
+    except PurchaseRecordError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"매입기록 삭제 중 오류: {exc}") from exc
     return JSONResponse(result)

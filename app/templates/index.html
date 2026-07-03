@@ -9,11 +9,15 @@
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 24px; margin-bottom: 18px; }
     h1, h2 { margin-top: 0; }
     label { display: block; margin: 14px 0 6px; font-weight: 700; }
-    input[type=file], input[type=url] { width: 100%; box-sizing: border-box; }
-    input[type=url] { padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; }
+    input[type=file], input[type=url], input[type=date], input[type=text] { width: 100%; box-sizing: border-box; }
+    input[type=url], input[type=date], input[type=text] { padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; }
     button { margin-top: 18px; padding: 12px 18px; border: 0; border-radius: 10px; cursor: pointer; }
     button + button { margin-left: 8px; }
     pre { background: #f6f6f6; padding: 16px; border-radius: 10px; white-space: pre-wrap; }
+    .result-box { background: #f6f6f6; padding: 16px; border-radius: 10px; white-space: pre-wrap; line-height: 1.6; }
+    .danger { background: #fdeaea; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
     .note { background: #faf7e8; padding: 12px 14px; border-radius: 10px; margin: 14px 0; }
     .help { color: #666; font-size: 13px; margin-top: 4px; }
     .status { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 12px; background: #eee; }
@@ -71,28 +75,135 @@
     <p>엑셀 템플릿을 구글시트로 가져온 뒤 품목환산표를 등록하세요. 프로그램은 시트를 새로 만들지 않고, 연결된 템플릿에 값만 채워 넣습니다.</p>
     <button type="button" id="reprocess-unregistered">미등록상품 재처리</button>
     <button type="button" id="apply-renames">상품명 일괄변경 실행</button>
+
+    <hr style="border:0; border-top:1px solid #eee; margin:22px 0;">
+    <h3>매입기록 삭제</h3>
+    <p class="help">선택한 매입일 전체 또는 매입일 + 특정 상품명 조건으로 매입기록 행을 삭제합니다.</p>
+    <form id="delete-form">
+      <div class="row">
+        <div>
+          <label for="delete_date">삭제할 매입일</label>
+          <input id="delete_date" name="delete_date" type="date" required>
+        </div>
+        <div>
+          <label for="delete_product">상품명 (선택)</label>
+          <input id="delete_product" name="delete_product" type="text" placeholder="비워두면 해당 날짜 전체 삭제">
+        </div>
+      </div>
+      <button type="submit" class="danger">매입기록 삭제</button>
+    </form>
   </div>
 
   <div class="card">
     <h2>처리 결과</h2>
-    <pre id="result">아직 실행 전입니다.</pre>
+    <div id="result" class="result-box">아직 실행 전입니다.</div>
   </div>
 
   <script>
     const form = document.getElementById('upload-form');
     const result = document.getElementById('result');
+    const deleteForm = document.getElementById('delete-form');
 
-    async function postJson(url, pendingText) {
+    function valueOrDash(value) {
+      if (value === undefined || value === null || value === '') return '-';
+      return value;
+    }
+
+    function numberOrZero(value) {
+      if (value === undefined || value === null || value === '') return 0;
+      return value;
+    }
+
+    function formatUploadResult(data) {
+      const lines = [];
+      lines.push('거래명세서 처리 결과');
+      lines.push('');
+
+      const sheetResult = data.sheet_result || {};
+      lines.push('재고파악 시트');
+      lines.push(`- 입고 반영: ${numberOrZero(sheetResult.updated_items)}개 품목`);
+      if (Array.isArray(sheetResult.skipped_items) && sheetResult.skipped_items.length) {
+        lines.push(`- 재고파악 제외/미매칭: ${sheetResult.skipped_items.length}개`);
+        lines.push(`  ${sheetResult.skipped_items.slice(0, 20).join(', ')}${sheetResult.skipped_items.length > 20 ? ' 외' : ''}`);
+      }
+      lines.push('');
+
+      const purchase = data.purchase_result || {};
+      lines.push('매입단가 시트');
+      if (purchase.ok === false) {
+        lines.push('- 상태: 실패');
+        lines.push(`- 오류: ${purchase.error || purchase.message || '확인 필요'}`);
+      } else if (purchase.status === '중복업로드') {
+        lines.push('- 상태: 중복업로드 차단');
+        lines.push(`- 전표번호: ${valueOrDash(purchase.slip_no)}`);
+        lines.push(`- 안내: ${purchase.message || '이미 처리된 거래명세서입니다.'}`);
+      } else if (purchase.enabled === false) {
+        lines.push('- 상태: 건너뜀');
+        lines.push(`- 안내: ${purchase.message || 'PURCHASE_SPREADSHEET_ID 확인 필요'}`);
+      } else {
+        lines.push('- 상태: 성공');
+        lines.push(`- 전표번호: ${valueOrDash(purchase.slip_no)}`);
+        lines.push(`- 매입일: ${valueOrDash(purchase.date)}`);
+        lines.push(`- 매입기록 추가: ${numberOrZero(purchase.inserted_rows)}행`);
+        lines.push(`- 미등록상품: ${numberOrZero(purchase.unregistered_rows)}행`);
+        if (purchase.history) {
+          lines.push(`- 전표상태: ${valueOrDash(purchase.history.status)}`);
+          lines.push(`- 입력완료금액: ${valueOrDash(purchase.history.completed_amount)}`);
+          lines.push(`- 미입력금액: ${valueOrDash(purchase.history.unresolved_amount)}`);
+        }
+      }
+      lines.push('');
+      lines.push(data.message || '완료되었습니다.');
+      return lines.join('\n');
+    }
+
+    function formatActionResult(title, data) {
+      const lines = [];
+      lines.push(title);
+      lines.push('');
+      if (data.ok === false) {
+        lines.push('상태: 실패');
+        lines.push(`오류: ${data.error || data.message || '확인 필요'}`);
+        return lines.join('\n');
+      }
+      lines.push('상태: 성공');
+
+      if ('inserted_rows' in data) lines.push(`매입기록 추가: ${numberOrZero(data.inserted_rows)}행`);
+      if ('processed_unregistered_rows' in data) lines.push(`미등록 처리완료: ${numberOrZero(data.processed_unregistered_rows)}행`);
+      if ('still_waiting_rows' in data) lines.push(`아직 처리대기: ${numberOrZero(data.still_waiting_rows)}행`);
+      if ('renamed_cells' in data) lines.push(`상품명 변경: ${numberOrZero(data.renamed_cells)}개 셀`);
+      if ('success_rows' in data) lines.push(`성공 행: ${numberOrZero(data.success_rows)}행`);
+      if ('failed_rows' in data) lines.push(`실패 행: ${numberOrZero(data.failed_rows)}행`);
+      if ('deleted_rows' in data) lines.push(`삭제된 매입기록: ${numberOrZero(data.deleted_rows)}행`);
+      if ('date' in data) lines.push(`매입일: ${valueOrDash(data.date)}`);
+      if ('product' in data) lines.push(`상품명: ${valueOrDash(data.product)}`);
+      if (data.message) lines.push(`안내: ${data.message}`);
+      if (data.note) lines.push(`참고: ${data.note}`);
+      return lines.join('\n');
+    }
+
+    async function handleResponse(response, formatter, fallbackTitle) {
+      const text = await response.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        result.textContent = `오류 (${response.status})\n` + text;
+        return;
+      }
+      if (!response.ok) {
+        const message = data.detail || data.message || JSON.stringify(data, null, 2);
+        result.textContent = `오류 (${response.status})\n${message}`;
+        return;
+      }
+      result.textContent = formatter ? formatter(data) : formatActionResult(fallbackTitle, data);
+    }
+
+    async function postJson(url, pendingText, title) {
       result.textContent = pendingText;
       try {
         const response = await fetch(url, { method: 'POST' });
-        const text = await response.text();
-        try {
-          const data = JSON.parse(text);
-          result.textContent = JSON.stringify(data, null, 2);
-        } catch {
-          result.textContent = `오류 (${response.status})\n` + text;
-        }
+        await handleResponse(response, (data) => formatActionResult(title, data), title);
       } catch (err) {
         result.textContent = '오류: ' + err.message;
       }
@@ -113,26 +224,41 @@
 
       try {
         const response = await fetch('/upload', { method: 'POST', body: formData });
-        const text = await response.text();
-
-        try {
-          const data = JSON.parse(text);
-          result.textContent = JSON.stringify(data, null, 2);
-        } catch {
-          result.textContent = `오류 (${response.status})\n` + text;
-        }
+        await handleResponse(response, formatUploadResult, '거래명세서 처리 결과');
       } catch (err) {
         result.textContent = '오류: ' + err.message;
       }
     });
 
-
     document.getElementById('reprocess-unregistered').addEventListener('click', () => {
-      postJson('/purchase/reprocess-unregistered', '미등록상품 재처리 중...');
+      postJson('/purchase/reprocess-unregistered', '미등록상품 재처리 중...', '미등록상품 재처리 결과');
     });
 
     document.getElementById('apply-renames').addEventListener('click', () => {
-      postJson('/purchase/apply-renames', '상품명 일괄변경 실행 중...');
+      postJson('/purchase/apply-renames', '상품명 일괄변경 실행 중...', '상품명 일괄변경 결과');
+    });
+
+    deleteForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(deleteForm);
+      const deleteDate = (formData.get('delete_date') || '').trim();
+      const deleteProduct = (formData.get('delete_product') || '').trim();
+
+      if (!deleteDate) {
+        result.textContent = '오류: 삭제할 매입일을 선택해 주세요.';
+        return;
+      }
+
+      const targetText = deleteProduct ? `${deleteDate} / ${deleteProduct}` : `${deleteDate} 전체 상품`;
+      if (!confirm(`매입기록에서 ${targetText} 조건의 행을 삭제할까요?`)) return;
+
+      result.textContent = '매입기록 삭제 중...';
+      try {
+        const response = await fetch('/purchase/delete-records', { method: 'POST', body: formData });
+        await handleResponse(response, (data) => formatActionResult('매입기록 삭제 결과', data), '매입기록 삭제 결과');
+      } catch (err) {
+        result.textContent = '오류: ' + err.message;
+      }
     });
   </script>
 </body>

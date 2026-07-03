@@ -339,7 +339,7 @@ def _apply_purchase_workbook_design(spreadsheet, worksheets: dict[str, Any]) -> 
         pass
 
 
-def _load_purchase_template_workbook(spreadsheet) -> dict[str, Any]:
+def _load_purchase_template_workbook(spreadsheet, *, maintenance: bool = False) -> dict[str, Any]:
     worksheets = {
         PURCHASE_RECORD_SHEET: _get_template_worksheet(spreadsheet, PURCHASE_RECORD_SHEET, PURCHASE_RECORD_HEADERS, rows=1000, cols=6),
         CONVERSION_SHEET: _get_template_worksheet(spreadsheet, CONVERSION_SHEET, CONVERSION_HEADERS, rows=1000, cols=5),
@@ -351,18 +351,31 @@ def _load_purchase_template_workbook(spreadsheet) -> dict[str, Any]:
         DROPDOWN_SHEET: _get_template_worksheet(spreadsheet, DROPDOWN_SHEET, DROPDOWN_HEADERS, rows=1000, cols=2),
     }
 
-    # 템플릿 자체는 유지하고, 프로그램 동작에 필요한 값/수식/드롭다운만 보완한다.
-    _hide_sheet(spreadsheet, worksheets[SLIP_DETAIL_SHEET])
-    _hide_sheet(spreadsheet, worksheets[DROPDOWN_SHEET])
+    # 품목환산표 D열(1개당 환산수량)은 실행 후에도 1.처럼 보이지 않게 최소 보정한다.
+    _normalize_conversion_multiplier_display(spreadsheet, worksheets[CONVERSION_SHEET])
+
+    # 품목환산표 E열(사용여부)은 Y/N 드롭다운 칩처럼 보이도록 보정한다.
+    _apply_conversion_usage_dropdown(spreadsheet, worksheets[CONVERSION_SHEET])
+
+    # 거래명세서 실행 때마다 서식/드롭다운/숨김을 반복 적용하면
+    # Google Sheets API 1분 쓰기 제한(429)에 걸릴 수 있다.
+    # 기본 실행은 값 입력에 필요한 최소 확인만 하고,
+    # 템플릿 점검이 필요할 때만 maintenance=True로 보완 작업을 수행한다.
+    if maintenance:
+        _hide_sheet(spreadsheet, worksheets[SLIP_DETAIL_SHEET])
+        _hide_sheet(spreadsheet, worksheets[DROPDOWN_SHEET])
+        _apply_template_quick_fixes(spreadsheet, worksheets)
+        _refresh_dropdown_lists(spreadsheet, worksheets)
+        _setup_validations(spreadsheet, worksheets)
+
+    # 원물단가표 조회 수식은 값 1회 업데이트만 사용하고,
+    # 이미 들어가 있으면 쓰기 요청을 보내지 않는다.
     _sync_unit_price_template_values(worksheets[UNIT_PRICE_SHEET])
-    _apply_template_quick_fixes(spreadsheet, worksheets)
-    _refresh_dropdown_lists(spreadsheet, worksheets)
-    _setup_validations(spreadsheet, worksheets)
     return worksheets
 
 
 def _check_purchase_template(spreadsheet) -> dict[str, Any]:
-    worksheets = _load_purchase_template_workbook(spreadsheet)
+    worksheets = _load_purchase_template_workbook(spreadsheet, maintenance=True)
     return {
         "ok": True,
         "message": "매입단가 템플릿 연결을 확인했습니다. 시트 디자인은 새로 만들거나 초기화하지 않았습니다.",
@@ -377,7 +390,7 @@ def _apply_template_quick_fixes(spreadsheet, worksheets: dict[str, Any]) -> None
         number_fmt = {
             "horizontalAlignment": "CENTER",
             "verticalAlignment": "MIDDLE",
-            "numberFormat": {"type": "NUMBER", "pattern": "0.########"},
+            "numberFormat": {"type": "NUMBER", "pattern": "#,##0.########"},
         }
         spreadsheet.batch_update(
             {
@@ -397,14 +410,241 @@ def _apply_template_quick_fixes(spreadsheet, worksheets: dict[str, Any]) -> None
     except Exception:
         pass
 
+
+def _normalize_conversion_multiplier_display(spreadsheet, conversion_ws) -> dict[str, Any]:
+    """
+    품목환산표 D열 표시가 1. 처럼 남는 경우를 방지한다.
+    값이 정수면 실제 셀 값을 정수로 다시 넣고, D열 숫자 서식도 1회 보정한다.
+    불필요한 쓰기 요청을 줄이기 위해 바뀐 셀만 업데이트한다.
+    """
+    changed = 0
+    try:
+        values = conversion_ws.get("D2:D1000")
+    except Exception:
+        values = []
+
+    updates: list[dict[str, Any]] = []
+    for idx, row in enumerate(values, start=2):
+        raw = str(row[0]).strip() if row else ""
+        if not raw:
+            continue
+        normalized = raw.replace(",", "")
+        try:
+            number = float(normalized)
+        except ValueError:
+            continue
+        if number.is_integer():
+            clean_value: int | float = int(number)
+        else:
+            clean_value = round(number, 8)
+        clean_text = str(clean_value)
+        # 1. / 1.0 / 1.000 같은 표시값만 실제 숫자 1로 정리한다.
+        if raw != clean_text and raw.rstrip("0").rstrip(".") == clean_text:
+            updates.append({"range": f"D{idx}", "values": [[clean_value]]})
+            changed += 1
+
+    if updates:
+        try:
+            conversion_ws.batch_update(updates, value_input_option="USER_ENTERED")
+        except Exception:
+            changed = 0
+
+    try:
+        spreadsheet.batch_update(
+            {
+                "requests": [
+                    _repeat_cell(
+                        conversion_ws,
+                        1,
+                        1000,
+                        3,
+                        4,
+                        {
+                            "horizontalAlignment": "CENTER",
+                            "verticalAlignment": "MIDDLE",
+                            "numberFormat": {"type": "NUMBER", "pattern": "#,##0.########"},
+                        },
+                        "numberFormat,horizontalAlignment,verticalAlignment",
+                    )
+                ]
+            }
+        )
+    except Exception:
+        pass
+
+    return {"normalized_multiplier_cells": changed}
+
+def _normalize_usage_value(value: Any) -> str:
+    """품목환산표 사용여부 표시값을 구글시트 드롭다운용 Y/N으로 정리한다."""
+    text = str(value or "").strip()
+    lower = text.lower()
+    if lower in INACTIVE_VALUES:
+        return "N"
+    if lower in ACTIVE_VALUES or text in {"Y", "N"}:
+        return "Y" if lower != "n" else "N"
+    # 알 수 없는 값은 사용자가 직접 넣은 값일 수 있으므로 그대로 둔다.
+    return text
+
+def _normalize_conversion_usage_display(conversion_ws) -> dict[str, Any]:
+    """
+    품목환산표 E열 사용여부를 Y/N 표시로 정리한다.
+    원본품명이 있는 행만 대상으로 하며, 빈 사용여부는 Y로 보정한다.
+    """
+    changed = 0
+    try:
+        values = conversion_ws.get("A2:E1000")
+    except Exception:
+        values = []
+
+    updates: list[dict[str, Any]] = []
+    for idx, row in enumerate(values, start=2):
+        original = str(row[0]).strip() if len(row) > 0 else ""
+        if not original:
+            continue
+        current = str(row[4]).strip() if len(row) > 4 else ""
+        normalized = _normalize_usage_value(current)
+        if normalized in {"Y", "N"} and current != normalized:
+            updates.append({"range": f"E{idx}", "values": [[normalized]]})
+            changed += 1
+
+    if updates:
+        try:
+            conversion_ws.batch_update(updates, value_input_option="USER_ENTERED")
+        except Exception:
+            changed = 0
+    return {"normalized_usage_cells": changed}
+
+def _apply_conversion_usage_dropdown(spreadsheet, conversion_ws) -> None:
+    """
+    품목환산표 사용여부(E열)를 구글시트 드롭다운 칩처럼 보이도록 설정한다.
+    Sheets API에서 드롭다운 색상 자체를 직접 지정하는 기능은 제한적이므로,
+    Y/N 드롭다운 + 조건부 서식으로 이미지와 최대한 비슷하게 맞춘다.
+    """
+    _normalize_conversion_usage_display(conversion_ws)
+
+    sheet_id = conversion_ws.id
+    delete_requests: list[dict[str, Any]] = []
+    try:
+        metadata = spreadsheet.fetch_sheet_metadata()
+        for sheet in metadata.get("sheets", []):
+            props = sheet.get("properties", {})
+            if props.get("sheetId") != sheet_id:
+                continue
+            rules = sheet.get("conditionalFormats", []) or []
+            # E열(0-index 4)만 대상으로 걸린 기존 조건부 서식은 중복을 막기 위해 제거한다.
+            for idx in reversed(range(len(rules))):
+                rule = rules[idx] or {}
+                ranges = rule.get("ranges", []) or []
+                if any(
+                    r.get("sheetId") == sheet_id
+                    and r.get("startColumnIndex", 0) <= 4
+                    and r.get("endColumnIndex", 0) >= 5
+                    for r in ranges
+                ):
+                    delete_requests.append(
+                        {
+                            "deleteConditionalFormatRule": {
+                                "sheetId": sheet_id,
+                                "index": idx,
+                            }
+                        }
+                    )
+            break
+    except Exception:
+        delete_requests = []
+
+    usage_range = {
+        "sheetId": sheet_id,
+        "startRowIndex": 1,
+        "endRowIndex": 1000,
+        "startColumnIndex": 4,
+        "endColumnIndex": 5,
+    }
+    requests: list[dict[str, Any]] = []
+    requests.extend(delete_requests)
+    requests.extend(
+        [
+            {
+                "setDataValidation": {
+                    "range": usage_range,
+                    "rule": {
+                        "condition": {
+                            "type": "ONE_OF_LIST",
+                            "values": [
+                                {"userEnteredValue": "Y"},
+                                {"userEnteredValue": "N"},
+                            ],
+                        },
+                        "strict": True,
+                        "showCustomUi": True,
+                    },
+                }
+            },
+            _repeat_cell(
+                conversion_ws,
+                1,
+                1000,
+                4,
+                5,
+                {
+                    "horizontalAlignment": "CENTER",
+                    "verticalAlignment": "MIDDLE",
+                    "textFormat": {"fontFamily": "Arial", "fontSize": 10},
+                },
+                "horizontalAlignment,verticalAlignment,textFormat",
+            ),
+            {
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [usage_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_EQ",
+                                "values": [{"userEnteredValue": "N"}],
+                            },
+                            "format": {
+                                "backgroundColor": _color("#F4CCCC"),
+                                "textFormat": {"foregroundColor": _color("#CC0000"), "bold": True},
+                            },
+                        },
+                    },
+                    "index": 0,
+                }
+            },
+            {
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [usage_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_EQ",
+                                "values": [{"userEnteredValue": "Y"}],
+                            },
+                            "format": {
+                                "backgroundColor": _color("#EDEDED"),
+                                "textFormat": {"foregroundColor": _color("#000000")},
+                            },
+                        },
+                    },
+                    "index": 0,
+                }
+            },
+        ]
+    )
+    try:
+        spreadsheet.batch_update({"requests": requests})
+    except Exception:
+        # 표시 보정 실패가 매입기록 입력 실패로 이어지지 않게 한다.
+        pass
+
 def _sync_unit_price_template_values(worksheet) -> None:
     """
-    템플릿 원물단가표의 디자인은 유지하고, 구글시트에서만 동작하는 조회 수식만 보완한다.
-    엑셀 원본 템플릿에는 A7 수식을 넣지 않아 #NAME? 오류가 보이지 않게 하고,
-    구글시트 연결 후 프로그램 실행 시 필요한 조회 수식만 다시 넣는다.
+    원물단가표 조회 수식/평균단가 요약 값만 보완한다.
+    이미 같은 값이 들어 있으면 쓰기 요청을 보내지 않아 429 제한을 줄인다.
+    서식/배경/병합은 템플릿 파일 기준으로 유지한다.
     """
     try:
-        current = worksheet.get("A1:L7")
+        current = worksheet.get("A1:I7")
     except Exception:
         current = []
 
@@ -416,8 +656,6 @@ def _sync_unit_price_template_values(worksheet) -> None:
 
     updates: list[dict[str, Any]] = []
 
-    # 제목/라벨이 비어 있거나 템플릿이 깨졌을 때만 값 보완.
-    # 기존 디자인은 건드리지 않고 값만 채운다.
     base_values = {
         "A1": "매입단가 조회",
         "A2": "월 선택",
@@ -440,8 +678,6 @@ def _sync_unit_price_template_values(worksheet) -> None:
         if not cell(row_number, col_number):
             updates.append({"range": a1, "values": [[value]]})
 
-    # 구글시트 전용 수식. 엑셀 파일에는 넣지 않고, 구글시트에서 프로그램이 연결될 때만 입력한다.
-    # 날짜가 선택되면 월 선택은 무시하고 날짜 + 상품명 기준으로 조회한다.
     result_formula = (
         '=IFERROR(SORT(FILTER({매입기록!F2:F,매입기록!A2:A,매입기록!B2:B,매입기록!C2:C,매입기록!D2:D,매입기록!E2:E},'
         'IF(OR($B$4="",$B$4="선택안함"),IF($B$2="전체",LEN(매입기록!B2:B),매입기록!F2:F=$B$2),매입기록!A2:A=$B$4),'
@@ -457,63 +693,33 @@ def _sync_unit_price_template_values(worksheet) -> None:
     total_amount_formula = f'=IFERROR(SUM(FILTER(매입기록!D2:D,{condition_expr},{product_expr})),0)'
     avg_price_formula = '=IFERROR(I4/I3,"")'
 
-    # A7은 검색 결과 표가 시작되는 위치다.
-    updates.append({"range": "A7", "values": [[result_formula]]})
-
-    # 기존 월별 상품별 평균단가 위치에는 선택 조건 기준 요약만 깔끔하게 보여준다.
-    summary_values = [
-        ["평균단가 요약", "", "", ""],
-        ["평균단가", avg_price_formula, "", ""],
-        ["총 매입량", total_qty_formula, "", ""],
-        ["총 매입금액", total_amount_formula, "", ""],
-    ]
-    updates.append({"range": "H1:K4", "values": summary_values})
-
-    try:
-        worksheet.batch_clear(["H5:L1000"])
-    except Exception:
-        pass
-    try:
-        # 요약 영역 디자인만 보완한다. 상세표/템플릿 디자인은 건드리지 않는다.
-        worksheet.merge_cells("H1:K1")
-        worksheet.format("H1:K1", {
-            "backgroundColor": {"red": 0.0588, "green": 0.4627, "blue": 0.4314},
-            "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True},
-            "horizontalAlignment": "CENTER",
-            "verticalAlignment": "MIDDLE",
-        })
-        worksheet.format("H2:H4", {
-            "backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827},
-            "textFormat": {"bold": True},
-            "horizontalAlignment": "CENTER",
-            "verticalAlignment": "MIDDLE",
-        })
-        worksheet.format("I2:I4", {
-            "horizontalAlignment": "RIGHT",
-            "verticalAlignment": "MIDDLE",
-            "numberFormat": {"type": "NUMBER", "pattern": "#,##0.###"},
-        })
-        worksheet.format("I2", {
-            "horizontalAlignment": "RIGHT",
-            "verticalAlignment": "MIDDLE",
-            "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
-        })
-        worksheet.format("I4", {
-            "horizontalAlignment": "RIGHT",
-            "verticalAlignment": "MIDDLE",
-            "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
-        })
-    except Exception:
-        pass
+    desired_cells = {
+        "A7": result_formula,
+        "H1": "평균단가 요약",
+        "H2": "평균단가",
+        "H3": "총 매입량",
+        "H4": "총 매입금액",
+        "I2": avg_price_formula,
+        "I3": total_qty_formula,
+        "I4": total_amount_formula,
+    }
+    for a1, value in desired_cells.items():
+        col_letter = ''.join(ch for ch in a1 if ch.isalpha())
+        row_number = int(''.join(ch for ch in a1 if ch.isdigit()))
+        col_number = ord(col_letter) - ord('A') + 1
+        current_value = cell(row_number, col_number)
+        # 구글시트 수식은 get 결과가 표시값으로 올 수 있어, 수식 칸은 비어 있을 때만 보완한다.
+        if current_value == "":
+            updates.append({"range": a1, "values": [[value]]})
 
     if updates:
         try:
             worksheet.batch_update(updates, value_input_option="USER_ENTERED")
         except Exception:
-            # 조회 수식 보완 실패가 매입기록 입력을 막지는 않게 한다.
             pass
 
 def _refresh_dropdown_lists(spreadsheet, worksheets: dict[str, Any]) -> None:
+    """설정 시트의 드롭다운 목록을 갱신하되, 내용이 같으면 쓰기 요청을 보내지 않는다."""
     dropdown_ws = worksheets[DROPDOWN_SHEET]
     conversion_ws = worksheets[CONVERSION_SHEET]
     purchase_ws = worksheets[PURCHASE_RECORD_SHEET]
@@ -531,14 +737,39 @@ def _refresh_dropdown_lists(spreadsheet, worksheets: dict[str, Any]) -> None:
     product_values = ["전체"] + sorted(products)
     month_values = ["전체"] + [f"{month}월" for month in range(1, 13)]
     max_len = max(len(month_values), len(product_values), 1)
-    rows = []
+    rows = [[DROPDOWN_HEADERS[0], DROPDOWN_HEADERS[1]]]
     for idx in range(max_len):
         rows.append([
             product_values[idx] if idx < len(product_values) else "",
             month_values[idx] if idx < len(month_values) else "",
         ])
-    dropdown_ws.clear()
-    dropdown_ws.update("A1", [DROPDOWN_HEADERS] + rows, value_input_option="USER_ENTERED")
+
+    # 예전 데이터가 더 길게 남아 있던 경우까지 지울 수 있게 충분한 빈 줄을 포함한다.
+    target_len = max(1000, len(rows))
+    padded_rows = rows + [["", ""] for _ in range(target_len - len(rows))]
+
+    try:
+        current = dropdown_ws.get(f"A1:B{target_len}")
+    except Exception:
+        current = []
+
+    def normalize_grid(values: list[list[Any]], length: int) -> list[list[str]]:
+        normalized: list[list[str]] = []
+        for idx in range(length):
+            row = values[idx] if idx < len(values) else []
+            normalized.append([
+                str(row[0]).strip() if len(row) > 0 else "",
+                str(row[1]).strip() if len(row) > 1 else "",
+            ])
+        return normalized
+
+    if normalize_grid(current, target_len) == normalize_grid(padded_rows, target_len):
+        return
+
+    try:
+        dropdown_ws.update(f"A1:B{target_len}", padded_rows, value_input_option="USER_ENTERED")
+    except Exception:
+        pass
 
 def _setup_validations(spreadsheet, worksheets: dict[str, Any]) -> None:
     unit_price_ws = worksheets[UNIT_PRICE_SHEET]
@@ -933,6 +1164,54 @@ def process_purchase_statement(settings: Settings, statement_data: dict[str, Any
         "history": history,
     }
 
+
+def delete_purchase_records(settings: Settings, date_text: str, product_name: str = "") -> dict[str, Any]:
+    """매입기록 시트에서 매입일 또는 매입일+상품명 조건으로 행을 삭제한다."""
+    clean_date = str(date_text or "").strip()
+    clean_product = str(product_name or "").strip()
+    if not clean_date:
+        raise PurchaseRecordError("삭제할 매입일을 선택해 주세요.")
+    if clean_product in {"전체", "선택안함"}:
+        clean_product = ""
+
+    spreadsheet = _open_purchase_spreadsheet(settings)
+    worksheets = _load_purchase_template_workbook(spreadsheet)
+    purchase_ws = worksheets[PURCHASE_RECORD_SHEET]
+    values = purchase_ws.get_all_values()
+    if len(values) <= 1:
+        return {
+            "ok": True,
+            "deleted_rows": 0,
+            "date": clean_date,
+            "product": clean_product or "전체",
+            "message": "매입기록에 삭제할 데이터가 없습니다.",
+        }
+
+    matched_rows: list[int] = []
+    for idx, row in enumerate(values[1:], start=2):
+        row_date = str(row[0]).strip() if len(row) > 0 else ""
+        row_product = str(row[1]).strip() if len(row) > 1 else ""
+        if row_date == clean_date and (not clean_product or row_product == clean_product):
+            matched_rows.append(idx)
+
+    for row_index in sorted(matched_rows, reverse=True):
+        purchase_ws.delete_rows(row_index)
+
+    if matched_rows:
+        _refresh_dropdown_lists(spreadsheet, worksheets)
+
+    return {
+        "ok": True,
+        "deleted_rows": len(matched_rows),
+        "date": clean_date,
+        "product": clean_product or "전체",
+        "message": (
+            f"매입기록에서 {clean_date} / {clean_product or '전체 상품'} 조건의 {len(matched_rows)}행을 삭제했습니다."
+            if matched_rows
+            else "조건에 맞는 매입기록이 없습니다."
+        ),
+        "note": "전표관리/전표상세관리는 중복 방지용으로 유지했습니다. 같은 전표를 다시 넣으려면 전표관리도 별도로 확인해 주세요.",
+    }
 
 def setup_purchase_workbook(settings: Settings) -> dict[str, Any]:
     """
