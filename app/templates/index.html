@@ -71,7 +71,6 @@
     <p>엑셀 템플릿을 구글시트로 가져온 뒤 품목환산표를 등록하세요. 프로그램은 시트를 새로 만들지 않고, 연결된 템플릿에 값만 채워 넣습니다.</p>
     <button type="button" id="reprocess-unregistered">미등록상품 재처리</button>
     <button type="button" id="apply-renames">상품명 일괄변경 실행</button>
-    <button type="button" id="setup-purchase">매입단가 템플릿 확인</button>
   </div>
 
   <div class="card">
@@ -127,9 +126,6 @@
       }
     });
 
-    document.getElementById('setup-purchase').addEventListener('click', () => {
-      postJson('/purchase/setup', '매입단가 템플릿 확인 중...');
-    });
 
     document.getElementById('reprocess-unregistered').addEventListener('click', () => {
       postJson('/purchase/reprocess-unregistered', '미등록상품 재처리 중...');

@@ -262,7 +262,7 @@ def _apply_purchase_workbook_design(spreadsheet, worksheets: dict[str, Any]) -> 
     widths = {
         PURCHASE_RECORD_SHEET: [105, 145, 95, 115, 95, 80],
         CONVERSION_SHEET: [175, 145, 80, 130, 95],
-        UNIT_PRICE_SHEET: [80, 110, 145, 95, 115, 95, 28, 80, 145, 95, 115, 95],
+        UNIT_PRICE_SHEET: [80, 110, 145, 95, 115, 95, 28],
         UNREGISTERED_SHEET: [105, 145, 105, 175, 80, 80, 100, 175, 95],
         RENAME_SHEET: [160, 160, 190],
         SLIP_HISTORY_SHEET: [145, 105, 115, 115, 115, 95],
@@ -303,12 +303,9 @@ def _apply_purchase_workbook_design(spreadsheet, worksheets: dict[str, Any]) -> 
     # 원물단가표 검색 화면 레이아웃
     unit_ws = worksheets[UNIT_PRICE_SHEET]
     requests.extend(_merge_range(unit_ws, 0, 1, 0, 6))   # A1:F1
-    requests.extend(_merge_range(unit_ws, 0, 1, 7, 12))  # H1:L1
     requests.append(_repeat_cell(unit_ws, 0, 1, 0, 6, section_fmt, "backgroundColor,textFormat,horizontalAlignment,verticalAlignment"))
-    requests.append(_repeat_cell(unit_ws, 0, 1, 7, 12, section_fmt, "backgroundColor,textFormat,horizontalAlignment,verticalAlignment"))
     requests.append(_repeat_cell(unit_ws, 1, 4, 0, 1, label_fmt, "backgroundColor,textFormat,horizontalAlignment,verticalAlignment"))
     requests.append(_repeat_cell(unit_ws, 5, 6, 0, 6, header_fmt, "backgroundColor,textFormat,horizontalAlignment,verticalAlignment"))
-    requests.append(_repeat_cell(unit_ws, 5, 6, 7, 12, header_fmt, "backgroundColor,textFormat,horizontalAlignment,verticalAlignment"))
 
     # 날짜/숫자/금액 서식
     requests.append(_repeat_cell(worksheets[PURCHASE_RECORD_SHEET], 1, 1000, 0, 1, date_fmt, "numberFormat,textFormat,horizontalAlignment,verticalAlignment"))
@@ -332,8 +329,6 @@ def _apply_purchase_workbook_design(spreadsheet, worksheets: dict[str, Any]) -> 
     requests.append(_repeat_cell(unit_ws, 6, 1000, 1, 2, date_fmt, "numberFormat,textFormat,horizontalAlignment,verticalAlignment"))
     requests.append(_repeat_cell(unit_ws, 6, 1000, 3, 4, number_fmt, "numberFormat,textFormat,horizontalAlignment,verticalAlignment"))
     requests.append(_repeat_cell(unit_ws, 6, 1000, 4, 6, money_fmt, "numberFormat,textFormat,horizontalAlignment,verticalAlignment"))
-    requests.append(_repeat_cell(unit_ws, 6, 1000, 9, 10, number_fmt, "numberFormat,textFormat,horizontalAlignment,verticalAlignment"))
-    requests.append(_repeat_cell(unit_ws, 6, 1000, 10, 12, money_fmt, "numberFormat,textFormat,horizontalAlignment,verticalAlignment"))
 
     try:
         # Google Sheets API는 한 번에 너무 많은 요청을 보내면 실패할 수 있으므로 나눠서 보낸다.
@@ -360,6 +355,7 @@ def _load_purchase_template_workbook(spreadsheet) -> dict[str, Any]:
     _hide_sheet(spreadsheet, worksheets[SLIP_DETAIL_SHEET])
     _hide_sheet(spreadsheet, worksheets[DROPDOWN_SHEET])
     _sync_unit_price_template_values(worksheets[UNIT_PRICE_SHEET])
+    _apply_template_quick_fixes(spreadsheet, worksheets)
     _refresh_dropdown_lists(spreadsheet, worksheets)
     _setup_validations(spreadsheet, worksheets)
     return worksheets
@@ -373,11 +369,39 @@ def _check_purchase_template(spreadsheet) -> dict[str, Any]:
         "sheets": list(worksheets.keys()),
     }
 
+def _apply_template_quick_fixes(spreadsheet, worksheets: dict[str, Any]) -> None:
+    """템플릿 디자인은 유지하면서 사용 중 불편한 표시/선택값만 보완한다."""
+    try:
+        conversion_ws = worksheets[CONVERSION_SHEET]
+        # 엑셀/구글시트에서 1개당 환산수량이 1. 처럼 보이지 않도록 정수는 1로 표시한다.
+        number_fmt = {
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+            "numberFormat": {"type": "NUMBER", "pattern": "0.########"},
+        }
+        spreadsheet.batch_update(
+            {
+                "requests": [
+                    _repeat_cell(
+                        conversion_ws,
+                        1,
+                        1000,
+                        3,
+                        4,
+                        number_fmt,
+                        "numberFormat,horizontalAlignment,verticalAlignment",
+                    )
+                ]
+            }
+        )
+    except Exception:
+        pass
+
 def _sync_unit_price_template_values(worksheet) -> None:
     """
     템플릿 원물단가표의 디자인은 유지하고, 구글시트에서만 동작하는 조회 수식만 보완한다.
-    엑셀 원본 템플릿에는 A7/H2 수식을 넣지 않아 #NAME? 오류가 보이지 않게 하고,
-    구글시트 연결 후 프로그램 실행 시 필요한 수식을 다시 넣는다.
+    엑셀 원본 템플릿에는 A7 수식을 넣지 않아 #NAME? 오류가 보이지 않게 하고,
+    구글시트 연결 후 프로그램 실행 시 필요한 조회 수식만 다시 넣는다.
     """
     try:
         current = worksheet.get("A1:L7")
@@ -395,13 +419,13 @@ def _sync_unit_price_template_values(worksheet) -> None:
     # 제목/라벨이 비어 있거나 템플릿이 깨졌을 때만 값 보완.
     # 기존 디자인은 건드리지 않고 값만 채운다.
     base_values = {
-        "A1": "원물단가표 검색",
-        "H1": "월별 상품별 평균단가",
+        "A1": "매입단가 조회",
         "A2": "월 선택",
         "A3": "상품명 선택",
         "A4": "날짜 선택",
         "B2": "전체",
         "B3": "전체",
+        "B4": "선택안함",
         "A6": "월",
         "B6": "매입일",
         "C6": "상품명",
@@ -417,30 +441,68 @@ def _sync_unit_price_template_values(worksheet) -> None:
             updates.append({"range": a1, "values": [[value]]})
 
     # 구글시트 전용 수식. 엑셀 파일에는 넣지 않고, 구글시트에서 프로그램이 연결될 때만 입력한다.
+    # 날짜가 선택되면 월 선택은 무시하고 날짜 + 상품명 기준으로 조회한다.
     result_formula = (
         '=IFERROR(SORT(FILTER({매입기록!F2:F,매입기록!A2:A,매입기록!B2:B,매입기록!C2:C,매입기록!D2:D,매입기록!E2:E},'
+        'IF(OR($B$4="",$B$4="선택안함"),IF($B$2="전체",LEN(매입기록!B2:B),매입기록!F2:F=$B$2),매입기록!A2:A=$B$4),'
+        'IF($B$3="전체",LEN(매입기록!B2:B),매입기록!B2:B=$B$3)),2,TRUE,3,TRUE),"조건에 맞는 기록이 없습니다.")'
+    )
+    condition_expr = (
+        'IF(OR($B$4="",$B$4="선택안함"),'
         'IF($B$2="전체",LEN(매입기록!B2:B),매입기록!F2:F=$B$2),'
-        'IF($B$3="전체",LEN(매입기록!B2:B),매입기록!B2:B=$B$3),'
-        'IF($B$4="",LEN(매입기록!A2:A),매입기록!A2:A=$B$4)),2,TRUE,3,TRUE),"조건에 맞는 기록이 없습니다.")'
+        '매입기록!A2:A=$B$4)'
     )
-    summary_formula = (
-        '=IFERROR(QUERY(매입기록!A:F,'
-        '"select F,B,sum(C),sum(D),sum(D)/sum(C) '
-        'where B is not null group by F,B '
-        "label F '월', B '상품명', sum(C) '총매입량', "
-        "sum(D) '총매입금액', sum(D)/sum(C) '평균단가'"
-        '",1),"")'
-    )
+    product_expr = 'IF($B$3="전체",LEN(매입기록!B2:B),매입기록!B2:B=$B$3)'
+    total_qty_formula = f'=IFERROR(SUM(FILTER(매입기록!C2:C,{condition_expr},{product_expr})),0)'
+    total_amount_formula = f'=IFERROR(SUM(FILTER(매입기록!D2:D,{condition_expr},{product_expr})),0)'
+    avg_price_formula = '=IFERROR(I4/I3,"")'
 
-    # A7은 검색 결과 표, H2는 월별/상품별 평균단가 표가 시작되는 위치다.
-    # 기존 엑셀 템플릿에서 #NAME?로 보이는 수식이 있더라도 구글시트 실행 시 정상 수식으로 다시 덮어쓴다.
+    # A7은 검색 결과 표가 시작되는 위치다.
     updates.append({"range": "A7", "values": [[result_formula]]})
-    updates.append({"range": "H2", "values": [[summary_formula]]})
 
-    # 이전 버전에서 H6:L7에 요약 수식/헤더가 들어간 경우, 새 템플릿 위치와 겹치지 않도록 정리한다.
+    # 기존 월별 상품별 평균단가 위치에는 선택 조건 기준 요약만 깔끔하게 보여준다.
+    summary_values = [
+        ["평균단가 요약", "", "", ""],
+        ["평균단가", avg_price_formula, "", ""],
+        ["총 매입량", total_qty_formula, "", ""],
+        ["총 매입금액", total_amount_formula, "", ""],
+    ]
+    updates.append({"range": "H1:K4", "values": summary_values})
+
     try:
-        if cell(6, 8) == "월" or cell(7, 8) in {"#NAME?", "#N/A", "#ERROR!"}:
-            worksheet.batch_clear(["H6:L1000"])
+        worksheet.batch_clear(["H5:L1000"])
+    except Exception:
+        pass
+    try:
+        # 요약 영역 디자인만 보완한다. 상세표/템플릿 디자인은 건드리지 않는다.
+        worksheet.merge_cells("H1:K1")
+        worksheet.format("H1:K1", {
+            "backgroundColor": {"red": 0.0588, "green": 0.4627, "blue": 0.4314},
+            "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True},
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+        })
+        worksheet.format("H2:H4", {
+            "backgroundColor": {"red": 0.851, "green": 0.918, "blue": 0.827},
+            "textFormat": {"bold": True},
+            "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE",
+        })
+        worksheet.format("I2:I4", {
+            "horizontalAlignment": "RIGHT",
+            "verticalAlignment": "MIDDLE",
+            "numberFormat": {"type": "NUMBER", "pattern": "#,##0.###"},
+        })
+        worksheet.format("I2", {
+            "horizontalAlignment": "RIGHT",
+            "verticalAlignment": "MIDDLE",
+            "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+        })
+        worksheet.format("I4", {
+            "horizontalAlignment": "RIGHT",
+            "verticalAlignment": "MIDDLE",
+            "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+        })
     except Exception:
         pass
 
@@ -466,7 +528,7 @@ def _refresh_dropdown_lists(spreadsheet, worksheets: dict[str, Any]) -> None:
         if name:
             products.add(name)
 
-    product_values = [""] + sorted(products)
+    product_values = ["전체"] + sorted(products)
     month_values = ["전체"] + [f"{month}월" for month in range(1, 13)]
     max_len = max(len(month_values), len(product_values), 1)
     rows = []

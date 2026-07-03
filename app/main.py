@@ -13,7 +13,6 @@ from app.services.purchase_records import (
     PurchaseRecordError,
     apply_product_renames,
     reprocess_unregistered_items,
-    setup_purchase_workbook,
 )
 from app.services.statement_fetcher import StatementFetchError, fetch_statement_html_from_url
 
@@ -140,18 +139,6 @@ async def upload_files(
             },
         }
     )
-    return JSONResponse(result)
-
-
-@app.post("/purchase/setup")
-def purchase_setup():
-    settings = get_settings()
-    try:
-        result = setup_purchase_workbook(settings)
-    except PurchaseRecordError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"매입단가 템플릿 확인 중 오류: {exc}") from exc
     return JSONResponse(result)
 
 
