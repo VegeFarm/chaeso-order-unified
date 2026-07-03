@@ -108,27 +108,34 @@ def _open_purchase_spreadsheet(settings: Settings):
     return open_spreadsheet_by_id(settings, settings.purchase_spreadsheet_id)
 
 
-def _get_or_create_worksheet(spreadsheet, title: str, headers: list[str], rows: int = 1000, cols: int | None = None):
+def _get_template_worksheet(spreadsheet, title: str, headers: list[str], rows: int = 1000, cols: int | None = None):
+    """
+    사용자가 엑셀 템플릿을 구글시트로 가져와 둔 상태를 전제로 한다.
+    시트를 새로 만들거나 디자인을 덮어쓰지 않고, 필요한 시트가 없으면 명확한 오류를 낸다.
+    단, 프로그램 동작에 꼭 필요한 헤더/행열 수만 보완한다.
+    """
     required_cols = cols or max(len(headers), 8)
     try:
         ws = spreadsheet.worksheet(title)
-    except WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=title, rows=rows, cols=required_cols)
+    except WorksheetNotFound as exc:
+        raise PurchaseRecordError(
+            f"매입단가 템플릿에 '{title}' 시트가 없습니다. "
+            "제공한 엑셀 템플릿을 구글시트로 가져온 뒤 PURCHASE_SPREADSHEET_ID를 그 시트 ID로 설정해 주세요."
+        ) from exc
 
-    # 기존 시트가 이미 있어도 이후 수식/검색 영역에서 필요한 열 수보다 작으면
-    # Google Sheets API가 "범위 초과" 오류를 내므로 먼저 안전하게 확장한다.
+    # 템플릿 디자인은 그대로 두고, 데이터가 늘어날 공간만 안전하게 확장한다.
     try:
         if ws.row_count < rows or ws.col_count < required_cols:
             ws.resize(rows=max(ws.row_count, rows), cols=max(ws.col_count, required_cols))
     except Exception:
-        # resize 실패 시 이후 update에서 구체적인 오류가 표시되도록 둔다.
         pass
 
+    # 템플릿에 헤더가 없거나 관리용 컬럼이 부족한 경우 값만 보완한다.
+    # 서식/디자인은 건드리지 않는다.
     current_headers = ws.row_values(1)
     if current_headers[: len(headers)] != headers:
         ws.update("A1", [headers], value_input_option="USER_ENTERED")
     return ws
-
 
 def _safe_get_all_records(worksheet) -> list[dict[str, Any]]:
     try:
@@ -337,71 +344,112 @@ def _apply_purchase_workbook_design(spreadsheet, worksheets: dict[str, Any]) -> 
         pass
 
 
-def _ensure_purchase_workbook(spreadsheet) -> dict[str, Any]:
+def _load_purchase_template_workbook(spreadsheet) -> dict[str, Any]:
     worksheets = {
-        PURCHASE_RECORD_SHEET: _get_or_create_worksheet(spreadsheet, PURCHASE_RECORD_SHEET, PURCHASE_RECORD_HEADERS, rows=1000, cols=6),
-        CONVERSION_SHEET: _get_or_create_worksheet(spreadsheet, CONVERSION_SHEET, CONVERSION_HEADERS, rows=1000, cols=5),
-        UNIT_PRICE_SHEET: _get_or_create_worksheet(spreadsheet, UNIT_PRICE_SHEET, UNIT_PRICE_HEADERS, rows=1000, cols=16),
-        UNREGISTERED_SHEET: _get_or_create_worksheet(spreadsheet, UNREGISTERED_SHEET, UNREGISTERED_HEADERS, rows=1000, cols=9),
-        RENAME_SHEET: _get_or_create_worksheet(spreadsheet, RENAME_SHEET, RENAME_HEADERS, rows=300, cols=3),
-        SLIP_HISTORY_SHEET: _get_or_create_worksheet(spreadsheet, SLIP_HISTORY_SHEET, SLIP_HISTORY_HEADERS, rows=1000, cols=6),
-        SLIP_DETAIL_SHEET: _get_or_create_worksheet(spreadsheet, SLIP_DETAIL_SHEET, SLIP_DETAIL_HEADERS, rows=5000, cols=8),
-        DROPDOWN_SHEET: _get_or_create_worksheet(spreadsheet, DROPDOWN_SHEET, DROPDOWN_HEADERS, rows=1000, cols=2),
+        PURCHASE_RECORD_SHEET: _get_template_worksheet(spreadsheet, PURCHASE_RECORD_SHEET, PURCHASE_RECORD_HEADERS, rows=1000, cols=6),
+        CONVERSION_SHEET: _get_template_worksheet(spreadsheet, CONVERSION_SHEET, CONVERSION_HEADERS, rows=1000, cols=5),
+        UNIT_PRICE_SHEET: _get_template_worksheet(spreadsheet, UNIT_PRICE_SHEET, UNIT_PRICE_HEADERS, rows=1000, cols=16),
+        UNREGISTERED_SHEET: _get_template_worksheet(spreadsheet, UNREGISTERED_SHEET, UNREGISTERED_HEADERS, rows=1000, cols=9),
+        RENAME_SHEET: _get_template_worksheet(spreadsheet, RENAME_SHEET, RENAME_HEADERS, rows=300, cols=3),
+        SLIP_HISTORY_SHEET: _get_template_worksheet(spreadsheet, SLIP_HISTORY_SHEET, SLIP_HISTORY_HEADERS, rows=1000, cols=6),
+        SLIP_DETAIL_SHEET: _get_template_worksheet(spreadsheet, SLIP_DETAIL_SHEET, SLIP_DETAIL_HEADERS, rows=5000, cols=8),
+        DROPDOWN_SHEET: _get_template_worksheet(spreadsheet, DROPDOWN_SHEET, DROPDOWN_HEADERS, rows=1000, cols=2),
     }
 
+    # 템플릿 자체는 유지하고, 프로그램 동작에 필요한 값/수식/드롭다운만 보완한다.
     _hide_sheet(spreadsheet, worksheets[SLIP_DETAIL_SHEET])
     _hide_sheet(spreadsheet, worksheets[DROPDOWN_SHEET])
-    _setup_unit_price_sheet(spreadsheet, worksheets[UNIT_PRICE_SHEET])
+    _sync_unit_price_template_values(worksheets[UNIT_PRICE_SHEET])
     _refresh_dropdown_lists(spreadsheet, worksheets)
     _setup_validations(spreadsheet, worksheets)
-    _apply_purchase_workbook_design(spreadsheet, worksheets)
     return worksheets
 
 
-def _setup_unit_price_sheet(spreadsheet, worksheet) -> None:
-    """원물단가표는 입력용이 아니라 조회용 화면으로 구성한다."""
-    # 이미 디자인이 적용되어 A1:F1/H1:L1이 병합된 상태에서 다시 만들기를 누를 수 있으므로
-    # 먼저 병합을 풀고 값을 다시 넣는다.
-    try:
-        spreadsheet.batch_update({"requests": [
-            {"unmergeCells": {"range": _grid(worksheet, 0, 1, 0, 6)}},
-            {"unmergeCells": {"range": _grid(worksheet, 0, 1, 7, 12)}},
-        ]})
-    except Exception:
-        pass
-    worksheet.update("A1:L7", [[""] * 12 for _ in range(7)], value_input_option="USER_ENTERED")
-    worksheet.update(
-        "A1:L7",
-        [
-            ["원물단가표 검색", "", "", "", "", "", "", "월별 상품별 평균단가", "", "", "", ""],
-            ["월 선택", "전체", "", "", "", "", "", "", "", "", "", ""],
-            ["상품명 선택", "전체", "", "", "", "", "", "", "", "", "", ""],
-            ["날짜 선택", "", "", "", "", "", "", "", "", "", "", ""],
-            ["", "", "", "", "", "", "", "", "", "", "", ""],
-            UNIT_PRICE_HEADERS + ["", ""] + ["월", "상품명", "총매입량", "총매입금액", "평균단가"],
-            ["", "", "", "", "", "", "", "", "", "", "", ""],
-        ],
-        value_input_option="USER_ENTERED",
-    )
+def _check_purchase_template(spreadsheet) -> dict[str, Any]:
+    worksheets = _load_purchase_template_workbook(spreadsheet)
+    return {
+        "ok": True,
+        "message": "매입단가 템플릿 연결을 확인했습니다. 시트 디자인은 새로 만들거나 초기화하지 않았습니다.",
+        "sheets": list(worksheets.keys()),
+    }
 
-    # 결과표는 매입기록을 기준으로 월/상품명/날짜 조건을 동시에 적용한다.
+def _sync_unit_price_template_values(worksheet) -> None:
+    """
+    템플릿 원물단가표의 디자인은 유지하고, 구글시트에서만 동작하는 조회 수식만 보완한다.
+    엑셀 원본 템플릿에는 A7/H2 수식을 넣지 않아 #NAME? 오류가 보이지 않게 하고,
+    구글시트 연결 후 프로그램 실행 시 필요한 수식을 다시 넣는다.
+    """
+    try:
+        current = worksheet.get("A1:L7")
+    except Exception:
+        current = []
+
+    def cell(row: int, col: int) -> str:
+        try:
+            return str(current[row - 1][col - 1] or "").strip()
+        except Exception:
+            return ""
+
+    updates: list[dict[str, Any]] = []
+
+    # 제목/라벨이 비어 있거나 템플릿이 깨졌을 때만 값 보완.
+    # 기존 디자인은 건드리지 않고 값만 채운다.
+    base_values = {
+        "A1": "원물단가표 검색",
+        "H1": "월별 상품별 평균단가",
+        "A2": "월 선택",
+        "A3": "상품명 선택",
+        "A4": "날짜 선택",
+        "B2": "전체",
+        "B3": "전체",
+        "A6": "월",
+        "B6": "매입일",
+        "C6": "상품명",
+        "D6": "매입량",
+        "E6": "매입총액",
+        "F6": "단가",
+    }
+    for a1, value in base_values.items():
+        col_letter = ''.join(ch for ch in a1 if ch.isalpha())
+        row_number = int(''.join(ch for ch in a1 if ch.isdigit()))
+        col_number = ord(col_letter) - ord('A') + 1
+        if not cell(row_number, col_number):
+            updates.append({"range": a1, "values": [[value]]})
+
+    # 구글시트 전용 수식. 엑셀 파일에는 넣지 않고, 구글시트에서 프로그램이 연결될 때만 입력한다.
     result_formula = (
         '=IFERROR(SORT(FILTER({매입기록!F2:F,매입기록!A2:A,매입기록!B2:B,매입기록!C2:C,매입기록!D2:D,매입기록!E2:E},'
         'IF($B$2="전체",LEN(매입기록!B2:B),매입기록!F2:F=$B$2),'
         'IF($B$3="전체",LEN(매입기록!B2:B),매입기록!B2:B=$B$3),'
         'IF($B$4="",LEN(매입기록!A2:A),매입기록!A2:A=$B$4)),2,TRUE,3,TRUE),"조건에 맞는 기록이 없습니다.")'
     )
-    worksheet.update("A7", [[result_formula]], value_input_option="USER_ENTERED")
-
-    # 오른쪽에는 월별/상품별 평균단가 요약표를 둔다.
     summary_formula = (
-        '=IFERROR(QUERY(매입기록!A2:F,'
+        '=IFERROR(QUERY(매입기록!A:F,'
         '"select F,B,sum(C),sum(D),sum(D)/sum(C) '
         'where B is not null group by F,B '
-        'label F \\\"월\\\", B \\\"상품명\\\", sum(C) \\\"총매입량\\\", '
-        'sum(D) \\\"총매입금액\\\", sum(D)/sum(C) \\\"평균단가\\\"",0),"")'
+        "label F '월', B '상품명', sum(C) '총매입량', "
+        "sum(D) '총매입금액', sum(D)/sum(C) '평균단가'"
+        '",1),"")'
     )
-    worksheet.update("H7", [[summary_formula]], value_input_option="USER_ENTERED")
+
+    # A7은 검색 결과 표, H2는 월별/상품별 평균단가 표가 시작되는 위치다.
+    # 기존 엑셀 템플릿에서 #NAME?로 보이는 수식이 있더라도 구글시트 실행 시 정상 수식으로 다시 덮어쓴다.
+    updates.append({"range": "A7", "values": [[result_formula]]})
+    updates.append({"range": "H2", "values": [[summary_formula]]})
+
+    # 이전 버전에서 H6:L7에 요약 수식/헤더가 들어간 경우, 새 템플릿 위치와 겹치지 않도록 정리한다.
+    try:
+        if cell(6, 8) == "월" or cell(7, 8) in {"#NAME?", "#N/A", "#ERROR!"}:
+            worksheet.batch_clear(["H6:L1000"])
+    except Exception:
+        pass
+
+    if updates:
+        try:
+            worksheet.batch_update(updates, value_input_option="USER_ENTERED")
+        except Exception:
+            # 조회 수식 보완 실패가 매입기록 입력을 막지는 않게 한다.
+            pass
 
 def _refresh_dropdown_lists(spreadsheet, worksheets: dict[str, Any]) -> None:
     dropdown_ws = worksheets[DROPDOWN_SHEET]
@@ -736,7 +784,7 @@ def process_purchase_statement(settings: Settings, statement_data: dict[str, Any
         }
 
     spreadsheet = _open_purchase_spreadsheet(settings)
-    worksheets = _ensure_purchase_workbook(spreadsheet)
+    worksheets = _load_purchase_template_workbook(spreadsheet)
     rules = _load_conversion_rules(worksheets[CONVERSION_SHEET])
 
     slip_no = _statement_no(statement_data)
@@ -825,18 +873,16 @@ def process_purchase_statement(settings: Settings, statement_data: dict[str, Any
 
 
 def setup_purchase_workbook(settings: Settings) -> dict[str, Any]:
+    """
+    과거에는 시트를 새로 만들고 디자인을 적용했지만,
+    이제는 사용자가 업로드한 엑셀 템플릿 구글시트가 정상 연결되어 있는지만 확인한다.
+    """
     spreadsheet = _open_purchase_spreadsheet(settings)
-    worksheets = _ensure_purchase_workbook(spreadsheet)
-    return {
-        "ok": True,
-        "message": "매입단가 시트를 만들고 디자인을 적용했습니다.",
-        "sheets": list(worksheets.keys()),
-    }
-
+    return _check_purchase_template(spreadsheet)
 
 def reprocess_unregistered_items(settings: Settings) -> dict[str, Any]:
     spreadsheet = _open_purchase_spreadsheet(settings)
-    worksheets = _ensure_purchase_workbook(spreadsheet)
+    worksheets = _load_purchase_template_workbook(spreadsheet)
     rules = _load_conversion_rules(worksheets[CONVERSION_SHEET])
     unregistered_ws = worksheets[UNREGISTERED_SHEET]
     detail_ws = worksheets[SLIP_DETAIL_SHEET]
@@ -918,7 +964,7 @@ def reprocess_unregistered_items(settings: Settings) -> dict[str, Any]:
 
 def apply_product_renames(settings: Settings) -> dict[str, Any]:
     spreadsheet = _open_purchase_spreadsheet(settings)
-    worksheets = _ensure_purchase_workbook(spreadsheet)
+    worksheets = _load_purchase_template_workbook(spreadsheet)
     rename_ws = worksheets[RENAME_SHEET]
     purchase_ws = worksheets[PURCHASE_RECORD_SHEET]
 

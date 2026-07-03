@@ -26,15 +26,18 @@ def process_uploaded_files(job_dir: str, html_bytes: bytes, order_bytes: bytes |
     work_dir = Path(job_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    today_sheet_result = ensure_today_sheet(settings)
-
     statement_data = read_statement_data_from_html_bytes(html_bytes)
     receipt_rows = build_receipt_rows(statement_data)
     receipt_items = build_receipt_items(receipt_rows)
     business_date = parse_business_date(statement_data, settings.business_timezone)
     sheet_title = format_sheet_title(business_date)
 
-    sheet_result = update_daily_sheet(settings, sheet_title, business_date, receipt_rows)
+    try:
+        today_sheet_result = ensure_today_sheet(settings)
+        sheet_result = update_daily_sheet(settings, sheet_title, business_date, receipt_rows)
+    except Exception as exc:
+        today_sheet_result = {"ok": False, "error": str(exc)}
+        sheet_result = {"ok": False, "error": str(exc)}
 
     try:
         purchase_result = process_purchase_statement(settings, statement_data, receipt_rows)

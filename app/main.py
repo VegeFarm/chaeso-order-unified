@@ -2,7 +2,7 @@ import shutil
 import tempfile
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -17,7 +17,7 @@ from app.services.purchase_records import (
 )
 from app.services.statement_fetcher import StatementFetchError, fetch_statement_html_from_url
 
-app = FastAPI(title="채소팜 통합 처리기", version="1.4.0")
+app = FastAPI(title="채소팜 통합 처리기", version="1.5.0")
 templates = Jinja2Templates(directory="app/templates")
 
 
@@ -39,13 +39,6 @@ def _validate_statement_html(html_bytes: bytes) -> None:
         read_statement_data_from_html_bytes(html_bytes)
     except HtmlStatementError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-def _run_job(job_dir: str, html_bytes: bytes, order_bytes: bytes | None) -> None:
-    try:
-        process_uploaded_files(job_dir, html_bytes, order_bytes)
-    finally:
-        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 @app.get("/health")
@@ -73,7 +66,6 @@ def home(request: Request):
 
 @app.post("/upload")
 async def upload_files(
-    background_tasks: BackgroundTasks,
     statement_url: str = Form(""),
     html_file: UploadFile | None = File(None),
     order_file: UploadFile | None = File(None),
@@ -117,32 +109,23 @@ async def upload_files(
             order_attached = False
 
     job_dir = tempfile.mkdtemp(prefix="veg-job-")
-    job_id = uuid4().hex[:8]
-
-    background_tasks.add_task(_run_job, job_dir, html_bytes, order_bytes)
-
     source_text = "거래명세서 링크" if source == "url" else "거래명세서 HTML 파일"
 
-    if order_attached:
-        message = (
-            f"{source_text} 처리가 접수되었습니다. 재고파악 시트에는 기존 입고/주문대조/가격계산을 진행하고, "
-            "매입단가 시트에는 품목환산표 기준으로 매입기록을 입력합니다."
-        )
-        mode = "full"
-    else:
-        message = (
-            f"{source_text} 처리가 접수되었습니다. 재고파악 시트에는 거래명세서 수량을 입고열에 반영하고, "
-            "매입단가 시트에는 품목환산표 기준으로 매입기록을 입력합니다."
-        )
-        mode = "sheet_only"
+    try:
+        result = process_uploaded_files(job_dir, html_bytes, order_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"처리 중 오류: {exc}") from exc
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
 
-    return JSONResponse(
+    result.update(
         {
             "ok": True,
-            "job_id": job_id,
-            "mode": mode,
             "source": source,
-            "message": message,
+            "message": (
+                f"{source_text} 처리가 완료되었습니다. 아래 purchase_result.inserted_rows / "
+                "unregistered_rows / error 값을 확인해 주세요."
+            ),
             "sheets": {
                 "재고파악_시트": {
                     "template": settings.template_sheet_name,
@@ -157,6 +140,7 @@ async def upload_files(
             },
         }
     )
+    return JSONResponse(result)
 
 
 @app.post("/purchase/setup")
@@ -167,7 +151,7 @@ def purchase_setup():
     except PurchaseRecordError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"매입단가 시트 만들기 중 오류: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"매입단가 템플릿 확인 중 오류: {exc}") from exc
     return JSONResponse(result)
 
 
