@@ -17,7 +17,7 @@ from app.services.purchase_records import (
 )
 from app.services.statement_fetcher import StatementFetchError, fetch_statement_html_from_url
 
-app = FastAPI(title="채소팜 통합 처리기", version="1.5.0")
+app = FastAPI(title="채소팜 통합 처리기", version="1.5.1")
 templates = Jinja2Templates(directory="app/templates")
 
 
@@ -122,10 +122,7 @@ async def upload_files(
         {
             "ok": True,
             "source": source,
-            "message": (
-                f"{source_text} 처리가 완료되었습니다. 아래 purchase_result.inserted_rows / "
-                "unregistered_rows / error 값을 확인해 주세요."
-            ),
+            "message": f"{source_text} 처리가 완료되었습니다. 화면의 매입단가 시트 처리 결과를 확인해 주세요.",
             "sheets": {
                 "재고파악_시트": {
                     "template": settings.template_sheet_name,

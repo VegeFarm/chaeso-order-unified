@@ -395,15 +395,19 @@ def _apply_template_quick_fixes(spreadsheet, worksheets: dict[str, Any]) -> None
         spreadsheet.batch_update(
             {
                 "requests": [
-                    _repeat_cell(
-                        conversion_ws,
-                        1,
-                        1000,
-                        3,
-                        4,
-                        number_fmt,
-                        "numberFormat,horizontalAlignment,verticalAlignment",
-                    )
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": conversion_ws.id,
+                                "startRowIndex": 1,
+                                "endRowIndex": 1000,
+                                "startColumnIndex": 3,
+                                "endColumnIndex": 4,
+                            },
+                            "cell": {"userEnteredFormat": number_fmt},
+                            "fields": "userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+                        }
+                    }
                 ]
             }
         )
@@ -414,8 +418,8 @@ def _apply_template_quick_fixes(spreadsheet, worksheets: dict[str, Any]) -> None
 def _normalize_conversion_multiplier_display(spreadsheet, conversion_ws) -> dict[str, Any]:
     """
     품목환산표 D열 표시가 1. 처럼 남는 경우를 방지한다.
-    값이 정수면 실제 셀 값을 정수로 다시 넣고, D열 숫자 서식도 1회 보정한다.
-    불필요한 쓰기 요청을 줄이기 위해 바뀐 셀만 업데이트한다.
+    - 표시값이 1. / 1.0 / 1.000이면 실제 숫자 1로 다시 저장한다.
+    - D열 숫자 서식을 Google Sheets API 필드마스크로 강제 적용한다.
     """
     changed = 0
     try:
@@ -433,39 +437,52 @@ def _normalize_conversion_multiplier_display(spreadsheet, conversion_ws) -> dict
             number = float(normalized)
         except ValueError:
             continue
+
+        clean_value: int | float
         if number.is_integer():
-            clean_value: int | float = int(number)
+            clean_value = int(number)
+            clean_text = str(clean_value)
         else:
             clean_value = round(number, 8)
-        clean_text = str(clean_value)
-        # 1. / 1.0 / 1.000 같은 표시값만 실제 숫자 1로 정리한다.
-        if raw != clean_text and raw.rstrip("0").rstrip(".") == clean_text:
+            clean_text = (f"{clean_value:.8f}").rstrip("0").rstrip(".")
+
+        # 표시값이 숫자 표준형과 다르면 셀 값을 다시 저장한다.
+        # 예: 1. / 1.0 / 1.000 -> 1, 0.500 -> 0.5
+        if raw != clean_text:
             updates.append({"range": f"D{idx}", "values": [[clean_value]]})
             changed += 1
 
     if updates:
         try:
-            conversion_ws.batch_update(updates, value_input_option="USER_ENTERED")
+            # RAW로 넣어 문자열 '1.'이 다시 남지 않게 한다.
+            conversion_ws.batch_update(updates, value_input_option="RAW")
         except Exception:
             changed = 0
 
+    # 기존 템플릿/구글시트에 남아 있는 0. 또는 1. 표시 서식을 강제로 덮어쓴다.
     try:
         spreadsheet.batch_update(
             {
                 "requests": [
-                    _repeat_cell(
-                        conversion_ws,
-                        1,
-                        1000,
-                        3,
-                        4,
-                        {
-                            "horizontalAlignment": "CENTER",
-                            "verticalAlignment": "MIDDLE",
-                            "numberFormat": {"type": "NUMBER", "pattern": "#,##0.########"},
-                        },
-                        "numberFormat,horizontalAlignment,verticalAlignment",
-                    )
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": conversion_ws.id,
+                                "startRowIndex": 1,
+                                "endRowIndex": 1000,
+                                "startColumnIndex": 3,
+                                "endColumnIndex": 4,
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "numberFormat": {"type": "NUMBER", "pattern": "0.########"},
+                                    "horizontalAlignment": "CENTER",
+                                    "verticalAlignment": "MIDDLE",
+                                }
+                            },
+                            "fields": "userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+                        }
+                    }
                 ]
             }
         )
@@ -1095,7 +1112,15 @@ def process_purchase_statement(settings: Settings, statement_data: dict[str, Any
             "message": "이미 처리완료된 거래명세서입니다. 중복 입력을 방지하기 위해 매입기록에 추가하지 않았습니다.",
         }
 
-    detail_existing = _load_detail_map(worksheets[SLIP_DETAIL_SHEET])
+    # 전표관리만 삭제하고 같은 거래명세서를 다시 넣는 경우,
+    # 전표상세관리의 과거 입력완료 행 때문에 매입기록 추가가 0행이 되는 문제가 있었다.
+    # 부분처리 전표를 이어서 처리할 때만 기존 전표상세관리 완료 행을 건너뛰고,
+    # 전표관리 기록이 없으면 재업로드 의도로 보고 전표상세관리 기존 행을 무시한다.
+    all_detail_existing = _load_detail_map(worksheets[SLIP_DETAIL_SHEET])
+    detail_existing = all_detail_existing if previous_status == "부분처리" else {}
+    reupload_after_history_deleted = previous_status is None and any(
+        key.startswith(f"{slip_no}||") for key in all_detail_existing.keys()
+    )
     grouped_by_product: dict[str, dict[str, Any]] = {}
     unregistered_rows: list[dict[str, Any]] = []
     detail_rows: list[dict[str, Any]] = []
@@ -1162,6 +1187,7 @@ def process_purchase_statement(settings: Settings, statement_data: dict[str, Any
         "inserted_rows": inserted_count,
         "unregistered_rows": unregistered_count,
         "history": history,
+        "reupload_after_history_deleted": reupload_after_history_deleted,
     }
 
 

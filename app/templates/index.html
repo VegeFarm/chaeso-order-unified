@@ -146,6 +146,12 @@
         lines.push(`- 매입일: ${valueOrDash(purchase.date)}`);
         lines.push(`- 매입기록 추가: ${numberOrZero(purchase.inserted_rows)}행`);
         lines.push(`- 미등록상품: ${numberOrZero(purchase.unregistered_rows)}행`);
+        if (purchase.reupload_after_history_deleted) {
+          lines.push('- 안내: 전표관리 삭제 후 재업로드로 판단해 다시 입력했습니다.');
+        }
+        if (Number(purchase.inserted_rows || 0) === 0 && Number(purchase.unregistered_rows || 0) === 0) {
+          lines.push('- 확인: 추가된 매입기록이 0행입니다. 전표상세관리 또는 품목환산표를 확인해 주세요.');
+        }
         if (purchase.history) {
           lines.push(`- 전표상태: ${valueOrDash(purchase.history.status)}`);
           lines.push(`- 입력완료금액: ${valueOrDash(purchase.history.completed_amount)}`);
