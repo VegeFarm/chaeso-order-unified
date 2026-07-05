@@ -254,7 +254,10 @@ def _apply_purchase_workbook_design(spreadsheet, worksheets: dict[str, Any]) -> 
         "verticalAlignment": "MIDDLE",
     }
     center_fmt = {**body_fmt, "horizontalAlignment": "CENTER"}
-    number_fmt = {**center_fmt, "numberFormat": {"type": "NUMBER", "pattern": "#,##0.###"}}
+    # 주의: "#,##0.###"처럼 소수점 뒤가 전부 #인 패턴은 정수(예: 65)도 "65."로 표시된다.
+    # numberFormat을 넣지 않고 필드마스크에만 numberFormat을 남기면
+    # 기존에 걸려 있던 잘못된 서식이 지워지고 '자동' 표시가 된다. (1 -> 1, 0.5 -> 0.5)
+    number_fmt = {**center_fmt}
     money_fmt = {**center_fmt, "numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
     date_fmt = {**center_fmt, "numberFormat": {"type": "DATE", "pattern": "yyyy-mm-dd"}}
     text_fmt = {**center_fmt, "numberFormat": {"type": "TEXT", "pattern": "@"}}
@@ -371,7 +374,116 @@ def _load_purchase_template_workbook(spreadsheet, *, maintenance: bool = False) 
     # 원물단가표 조회 수식은 값 1회 업데이트만 사용하고,
     # 이미 들어가 있으면 쓰기 요청을 보내지 않는다.
     _sync_unit_price_template_values(worksheets[UNIT_PRICE_SHEET])
+
+    # 원물단가표 평균단가 요약(I2:I4)이 "5,000." 처럼 보이지 않게 서식을 보정한다.
+    _fix_unit_price_summary_format(spreadsheet, worksheets[UNIT_PRICE_SHEET])
+
+    # 원물단가표 매입일 표시가 46206 같은 날짜 일련번호로 보이지 않게 하고,
+    # 날짜선택(B4)에 구글시트 날짜 선택 달력이 뜨도록 최소 보정한다.
+    _fix_unit_price_date_format_and_calendar(spreadsheet, worksheets[UNIT_PRICE_SHEET])
     return worksheets
+
+
+def _fix_unit_price_date_format_and_calendar(spreadsheet, unit_ws) -> None:
+    """
+    원물단가표 날짜 표시/선택 보정.
+    - 조회 결과의 매입일(B7:B1000)이 46206 같은 숫자로 보이면 날짜 서식을 다시 적용한다.
+    - 날짜선택 셀(B4)에 DATE_IS_VALID 유효성 검사를 걸어 구글시트 날짜 선택 달력을 사용할 수 있게 한다.
+
+    참고: B4는 "선택안함" 텍스트도 허용해야 하므로 strict=False로 둔다.
+    """
+    date_format = {
+        "numberFormat": {"type": "DATE", "pattern": "yyyy-mm-dd"},
+        "horizontalAlignment": "CENTER",
+        "verticalAlignment": "MIDDLE",
+    }
+    try:
+        spreadsheet.batch_update(
+            {
+                "requests": [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": unit_ws.id,
+                                "startRowIndex": 3,   # B4
+                                "endRowIndex": 4,
+                                "startColumnIndex": 1,
+                                "endColumnIndex": 2,
+                            },
+                            "cell": {"userEnteredFormat": date_format},
+                            "fields": "userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+                        }
+                    },
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": unit_ws.id,
+                                "startRowIndex": 6,   # B7:B1000 조회 결과 매입일
+                                "endRowIndex": 1000,
+                                "startColumnIndex": 1,
+                                "endColumnIndex": 2,
+                            },
+                            "cell": {"userEnteredFormat": date_format},
+                            "fields": "userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment",
+                        }
+                    },
+                    {
+                        "setDataValidation": {
+                            "range": {
+                                "sheetId": unit_ws.id,
+                                "startRowIndex": 3,
+                                "endRowIndex": 4,
+                                "startColumnIndex": 1,
+                                "endColumnIndex": 2,
+                            },
+                            "rule": {
+                                "condition": {"type": "DATE_IS_VALID"},
+                                "strict": False,
+                                "showCustomUi": True,
+                            },
+                        }
+                    },
+                ]
+            }
+        )
+    except Exception:
+        # 표시/달력 보정 실패가 매입기록 입력 실패로 이어지지 않게 한다.
+        pass
+
+
+def _fix_unit_price_summary_format(spreadsheet, unit_ws) -> None:
+    """
+    원물단가표 I2:I4(평균단가/총 매입량/총 매입금액) 표시 서식을 보정한다.
+    "#,##0.###"처럼 소수점 뒤가 전부 #인 패턴은 정수도 "5,000."으로 표시되므로,
+    소수점이 없는 "#,##0" 패턴으로 강제한다. (표시만 반올림되고 실제 값은 유지됨)
+    """
+    try:
+        spreadsheet.batch_update(
+            {
+                "requests": [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": unit_ws.id,
+                                "startRowIndex": 1,   # 2행
+                                "endRowIndex": 4,     # 4행까지
+                                "startColumnIndex": 8,  # I열
+                                "endColumnIndex": 9,
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+                                }
+                            },
+                            "fields": "userEnteredFormat.numberFormat",
+                        }
+                    }
+                ]
+            }
+        )
+    except Exception:
+        # 표시 보정 실패가 매입기록 입력 실패로 이어지지 않게 한다.
+        pass
 
 
 def _check_purchase_template(spreadsheet) -> dict[str, Any]:
@@ -386,11 +498,12 @@ def _apply_template_quick_fixes(spreadsheet, worksheets: dict[str, Any]) -> None
     """템플릿 디자인은 유지하면서 사용 중 불편한 표시/선택값만 보완한다."""
     try:
         conversion_ws = worksheets[CONVERSION_SHEET]
-        # 엑셀/구글시트에서 1개당 환산수량이 1. 처럼 보이지 않도록 정수는 1로 표시한다.
+        # 엑셀/구글시트에서 1개당 환산수량이 1. 처럼 보이지 않도록
+        # numberFormat을 아예 지워 '자동' 표시로 만든다.
+        # ("#,##0.########" 같은 패턴은 정수도 "1."로 표시되는 원인이었음)
         number_fmt = {
             "horizontalAlignment": "CENTER",
             "verticalAlignment": "MIDDLE",
-            "numberFormat": {"type": "NUMBER", "pattern": "#,##0.########"},
         }
         spreadsheet.batch_update(
             {
@@ -475,7 +588,8 @@ def _normalize_conversion_multiplier_display(spreadsheet, conversion_ws) -> dict
                             },
                             "cell": {
                                 "userEnteredFormat": {
-                                    "numberFormat": {"type": "NUMBER", "pattern": "0.########"},
+                                    # numberFormat을 비워서 '자동' 표시로 초기화한다.
+                                    # "0.########" 패턴은 정수 1을 "1."로 표시하는 원인이었음.
                                     "horizontalAlignment": "CENTER",
                                     "verticalAlignment": "MIDDLE",
                                 }
