@@ -2,22 +2,16 @@ import shutil
 import tempfile
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
 from app.services.html_parser import HtmlStatementError, read_statement_data_from_html_bytes
 from app.services.pipeline import process_uploaded_files
-from app.services.purchase_records import (
-    PurchaseRecordError,
-    apply_product_renames,
-    delete_purchase_records,
-    reprocess_unregistered_items,
-)
 from app.services.statement_fetcher import StatementFetchError, fetch_statement_html_from_url
 
-app = FastAPI(title="채소팜 통합 처리기", version="1.5.1")
+app = FastAPI(title="채소팜 주문수량확인", version="1.3.0")
 templates = Jinja2Templates(directory="app/templates")
 
 
@@ -41,6 +35,13 @@ def _validate_statement_html(html_bytes: bytes) -> None:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _run_job(job_dir: str, html_bytes: bytes, order_bytes: bytes | None) -> None:
+    try:
+        process_uploaded_files(job_dir, html_bytes, order_bytes)
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
 @app.get("/health")
 def health_check():
     return {"ok": True}
@@ -54,8 +55,6 @@ def home(request: Request):
         "index.html",
         {
             "app_name": app.title,
-            "inventory_sheet_configured": bool(settings.spreadsheet_id),
-            "purchase_sheet_configured": bool(settings.purchase_spreadsheet_id),
             "item_sheet": settings.item_settings_sheet_name,
             "match_sheet": settings.match_rules_sheet_name,
             "price_sheet": settings.price_rules_sheet_name,
@@ -66,6 +65,7 @@ def home(request: Request):
 
 @app.post("/upload")
 async def upload_files(
+    background_tasks: BackgroundTasks,
     statement_url: str = Form(""),
     html_file: UploadFile | None = File(None),
     order_file: UploadFile | None = File(None),
@@ -109,71 +109,31 @@ async def upload_files(
             order_attached = False
 
     job_dir = tempfile.mkdtemp(prefix="veg-job-")
+    job_id = uuid4().hex[:8]
+
+    background_tasks.add_task(_run_job, job_dir, html_bytes, order_bytes)
+
     source_text = "거래명세서 링크" if source == "url" else "거래명세서 HTML 파일"
 
-    try:
-        result = process_uploaded_files(job_dir, html_bytes, order_bytes)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"처리 중 오류: {exc}") from exc
-    finally:
-        shutil.rmtree(job_dir, ignore_errors=True)
+    if order_attached:
+        message = f"{source_text} 처리가 접수되었습니다. 자동 대상 시트가 없으면 생성하고, 토요일은 일요일 날짜로 보정하며, 새 시트는 직전 최신 시트의 남은 수량을 재고열에 반영한 뒤 입고 반영/주문대조/가격계산을 진행합니다."
+        mode = "full"
+    else:
+        message = f"{source_text} 처리가 접수되었습니다. 자동 대상 시트가 없으면 생성하고, 토요일은 일요일 날짜로 보정하며, 새 시트는 직전 최신 시트의 남은 수량을 재고열에 반영한 뒤 거래명세서 수량을 입고열에 반영합니다."
+        mode = "sheet_only"
 
-    result.update(
+    return JSONResponse(
         {
             "ok": True,
+            "job_id": job_id,
+            "mode": mode,
             "source": source,
-            "message": f"{source_text} 처리가 완료되었습니다. 화면의 매입단가 시트 처리 결과를 확인해 주세요.",
+            "message": message,
             "sheets": {
-                "재고파악_시트": {
-                    "template": settings.template_sheet_name,
-                    "item_settings": settings.item_settings_sheet_name,
-                    "match_rules": settings.match_rules_sheet_name,
-                    "price_rules": settings.price_rules_sheet_name,
-                },
-                "매입단가_시트": {
-                    "configured": bool(settings.purchase_spreadsheet_id),
-                    "required_env": "PURCHASE_SPREADSHEET_ID",
-                },
+                "item_settings": settings.item_settings_sheet_name,
+                "match_rules": settings.match_rules_sheet_name,
+                "price_rules": settings.price_rules_sheet_name,
+                "template": settings.template_sheet_name,
             },
         }
     )
-    return JSONResponse(result)
-
-
-@app.post("/purchase/reprocess-unregistered")
-def purchase_reprocess_unregistered():
-    settings = get_settings()
-    try:
-        result = reprocess_unregistered_items(settings)
-    except PurchaseRecordError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"미등록상품 재처리 중 오류: {exc}") from exc
-    return JSONResponse(result)
-
-
-@app.post("/purchase/apply-renames")
-def purchase_apply_renames():
-    settings = get_settings()
-    try:
-        result = apply_product_renames(settings)
-    except PurchaseRecordError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"상품명 일괄변경 중 오류: {exc}") from exc
-    return JSONResponse(result)
-
-
-@app.post("/purchase/delete-records")
-def purchase_delete_records(
-    delete_date: str = Form(""),
-    delete_product: str = Form(""),
-):
-    settings = get_settings()
-    try:
-        result = delete_purchase_records(settings, delete_date, delete_product)
-    except PurchaseRecordError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"매입기록 삭제 중 오류: {exc}") from exc
-    return JSONResponse(result)
