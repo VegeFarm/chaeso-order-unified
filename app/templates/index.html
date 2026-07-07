@@ -4,56 +4,267 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>채소팜 통합 처리기</title>
+  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
   <style>
-    body { font-family: Arial, sans-serif; margin: 40px; max-width: 860px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 24px; }
-    h1 { margin-top: 0; }
-    label { display: block; margin: 14px 0 6px; font-weight: 700; }
-    input[type=file], input[type=url] { width: 100%; box-sizing: border-box; }
-    input[type=url] { padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; }
-    button { margin-top: 18px; padding: 12px 18px; border: 0; border-radius: 10px; cursor: pointer; }
-    pre { background: #f6f6f6; padding: 16px; border-radius: 10px; white-space: pre-wrap; }
-    .note { background: #faf7e8; padding: 12px 14px; border-radius: 10px; margin: 14px 0; }
-    .help { color: #666; font-size: 13px; margin-top: 4px; }
+    :root {
+      --leaf: #1e4d2b;        /* 짙은 잎녹색 */
+      --leaf-soft: #eaf2ea;   /* 연한 녹색 배경 */
+      --sprout: #3a9d4e;      /* 포인트 녹색 */
+      --ink: #20261f;
+      --muted: #6b746a;
+      --line: #e2e7df;
+      --bg: #f6f7f3;
+      --card: #ffffff;
+      --amber-bg: #fbf4e2;
+      --amber-ink: #8a6414;
+      --mono: "SF Mono", "JetBrains Mono", ui-monospace, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Pretendard Variable", Pretendard, -apple-system, "Malgun Gothic", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      margin: 0;
+      padding: 40px 20px 64px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; }
+
+    /* ── 헤더 ─────────────────────────── */
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+    .mark {
+      width: 40px; height: 40px; border-radius: 12px;
+      background: var(--leaf); color: #fff;
+      display: grid; place-items: center; font-size: 20px;
+      flex-shrink: 0;
+    }
+    h1 { font-size: 21px; font-weight: 800; margin: 0; letter-spacing: -0.02em; }
+    .sub { font-size: 13.5px; color: var(--muted); margin: 2px 0 0; }
+
+    /* ── 처리 흐름 스트립 ─────────────── */
+    .flow {
+      display: flex; align-items: stretch; gap: 0;
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 14px; overflow: hidden; margin-bottom: 16px;
+    }
+    .flow-step { flex: 1; padding: 12px 14px; position: relative; }
+    .flow-step + .flow-step { border-left: 1px dashed var(--line); }
+    .flow-step .t { font-size: 12px; font-weight: 700; color: var(--leaf); letter-spacing: .02em; }
+    .flow-step .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    /* ── 카드 공통 ─────────────────────── */
+    .card {
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 14px; padding: 22px; margin-bottom: 16px;
+    }
+    .card h2 {
+      font-size: 14px; font-weight: 800; margin: 0 0 4px;
+      display: flex; align-items: center; gap: 8px; letter-spacing: -0.01em;
+    }
+    .badge {
+      font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+    }
+    .badge.req { background: var(--leaf-soft); color: var(--leaf); }
+    .badge.opt { background: var(--amber-bg); color: var(--amber-ink); }
+    .card > .desc { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+
+    label { display: block; margin: 14px 0 6px; font-weight: 700; font-size: 13.5px; }
+    label:first-of-type { margin-top: 0; }
+    .help { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
+
+    input[type=url] {
+      width: 100%; padding: 11px 13px; font-size: 14px;
+      border: 1px solid var(--line); border-radius: 10px;
+      font-family: inherit; background: #fcfdfb; color: var(--ink);
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input[type=url]:focus {
+      outline: none; border-color: var(--sprout);
+      box-shadow: 0 0 0 3px rgba(58,157,78,.15);
+    }
+
+    /* 파일 입력: input은 그대로 두고 겉모습만 입힘 */
+    .file-box { position: relative; }
+    .file-box input[type=file] {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      opacity: 0; cursor: pointer;
+    }
+    .file-face {
+      display: flex; align-items: center; gap: 10px;
+      border: 1.5px dashed var(--line); border-radius: 10px;
+      padding: 13px 14px; background: #fcfdfb;
+      font-size: 13.5px; color: var(--muted);
+      transition: border-color .15s, background .15s;
+    }
+    .file-box:hover .file-face,
+    .file-box input:focus-visible + .file-face {
+      border-color: var(--sprout); background: var(--leaf-soft);
+    }
+    .file-face .icon { font-size: 17px; }
+    .file-face .name { color: var(--ink); font-weight: 600; }
+    .file-face.picked { border-style: solid; border-color: var(--sprout); background: var(--leaf-soft); }
+
+    .divider {
+      display: flex; align-items: center; gap: 10px;
+      margin: 16px 0; font-size: 12px; color: var(--muted); font-weight: 600;
+    }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+    .note {
+      background: var(--amber-bg); color: var(--amber-ink);
+      padding: 11px 14px; border-radius: 10px;
+      font-size: 12.5px; line-height: 1.6; margin-top: 16px;
+    }
+
+    button[type=submit] {
+      width: 100%; margin-top: 18px; padding: 14px;
+      border: 0; border-radius: 12px; cursor: pointer;
+      background: var(--leaf); color: #fff;
+      font-size: 15px; font-weight: 800; font-family: inherit;
+      letter-spacing: -0.01em;
+      transition: background .15s, transform .05s;
+    }
+    button[type=submit]:hover { background: #17632f; }
+    button[type=submit]:active { transform: scale(.99); }
+    button[type=submit]:focus-visible { outline: 3px solid rgba(58,157,78,.4); outline-offset: 2px; }
+
+    /* ── 결과 ─────────────────────────── */
+    .result-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .result-head h2 { margin: 0; }
+    .status {
+      font-size: 11.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+      background: #eef0ec; color: var(--muted);
+    }
+    .status.loading { background: var(--amber-bg); color: var(--amber-ink); }
+    .status.ok { background: var(--leaf-soft); color: var(--leaf); }
+    .status.error { background: #fdecec; color: #b23434; }
+    @keyframes pulse { 50% { opacity: .5; } }
+    .status.loading { animation: pulse 1.2s ease-in-out infinite; }
+
+    pre {
+      background: #f2f4ef; border: 1px solid var(--line);
+      padding: 15px 16px; border-radius: 10px;
+      white-space: pre-wrap; word-break: break-word;
+      font-family: var(--mono); font-size: 12.5px; line-height: 1.65;
+      color: #37402f; margin: 0;
+    }
+
+    footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 26px; }
+
+    @media (max-width: 560px) {
+      body { padding: 24px 14px 48px; }
+      .flow { flex-direction: column; }
+      .flow-step + .flow-step { border-left: 0; border-top: 1px dashed var(--line); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .status.loading { animation: none; }
+      button[type=submit] { transition: none; }
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>{{ app_name }}</h1>
-    <p>거래명세서 HTML 파일을 올리거나, 마켓봄 거래명세서 링크를 붙여넣어 실행할 수 있습니다. 주문내역 파일은 선택입니다.</p>
-    <ul>
-      <li>날짜 시트가 없으면 <strong>{{ template_sheet }}</strong> 시트를 복사해서 새 시트를 만듭니다.</li>
-      <li>시트 반영은 거래명세서 전체 상세내역을 쓰지 않고, {{ item_sheet }} 기준으로 묶은 <strong>입고 수량만 입고열</strong>에 반영합니다.</li>
-      <li>주문내역 파일까지 올리면 {{ match_sheet }} 기준 주문대조 + {{ price_sheet }} 기준 가격계산 후 <strong>텔레그램 요약 메시지만</strong> 전송합니다.</li>
-    </ul>
+  <div class="wrap">
 
-    <div class="note">
-      주문내역 파일을 올리지 않으면 시트 반영만 진행되고, 텔레그램 전송은 하지 않습니다.<br>
-      링크와 HTML 파일을 둘 다 넣으면 링크를 우선 사용합니다.
+    <header>
+      <div class="mark">🌿</div>
+      <div>
+        <h1>{{ app_name }}</h1>
+        <p class="sub">마켓봄 거래명세서를 시트에 반영하고, 주문내역까지 있으면 대조·가격계산 결과를 텔레그램으로 보냅니다.</p>
+      </div>
+    </header>
+
+    <div class="flow" aria-label="처리 흐름">
+      <div class="flow-step">
+        <div class="t">1 · 명세서 읽기</div>
+        <div class="d">링크 또는 HTML 파일</div>
+      </div>
+      <div class="flow-step">
+        <div class="t">2 · 시트 반영</div>
+        <div class="d">{{ item_sheet }} 기준 입고 수량만 입고열에 기록 · 날짜 시트 없으면 {{ template_sheet }} 복사 생성</div>
+      </div>
+      <div class="flow-step">
+        <div class="t">3 · 주문내역 첨부 시</div>
+        <div class="d">{{ match_sheet }} 대조 + {{ price_sheet }} 가격계산 후 텔레그램 요약 전송</div>
+      </div>
     </div>
 
     <form id="upload-form">
-      <label for="statement_url">거래명세서 링크 (선택)</label>
-      <input id="statement_url" name="statement_url" type="url" placeholder="https://wholesalesales.marketbom.com/statement/...">
-      <div class="help">마켓봄 /statement/ 링크만 허용됩니다.</div>
+      <div class="card">
+        <h2>거래명세서 <span class="badge req">필수 · 둘 중 하나</span></h2>
+        <p class="desc">링크와 파일을 둘 다 넣으면 링크를 우선 사용합니다.</p>
 
-      <label for="html_file">거래명세서 HTML 파일 (선택)</label>
-      <input id="html_file" name="html_file" type="file" accept=".html,.htm">
-      <div class="help">링크를 입력하지 않을 때만 사용됩니다.</div>
+        <label for="statement_url">거래명세서 링크</label>
+        <input id="statement_url" name="statement_url" type="url" placeholder="https://wholesalesales.marketbom.com/statement/...">
+        <div class="help">마켓봄 /statement/ 링크만 허용됩니다.</div>
 
-      <label for="order_file">주문내역 TXT 또는 CSV (선택)</label>
-      <input id="order_file" name="order_file" type="file" accept=".txt,.csv">
+        <div class="divider">또는</div>
 
-      <button type="submit">업로드 후 실행</button>
+        <label for="html_file">거래명세서 HTML 파일</label>
+        <div class="file-box">
+          <input id="html_file" name="html_file" type="file" accept=".html,.htm">
+          <div class="file-face" id="html_face">
+            <span class="icon">📄</span><span class="text">.html / .htm 파일 선택</span>
+          </div>
+        </div>
+        <div class="help">링크를 입력하지 않을 때만 사용됩니다.</div>
+      </div>
+
+      <div class="card">
+        <h2>주문내역 <span class="badge opt">선택</span></h2>
+        <p class="desc">올리지 않으면 시트 반영만 진행되고, 텔레그램 전송은 하지 않습니다.</p>
+
+        <label for="order_file">주문내역 TXT 또는 CSV</label>
+        <div class="file-box">
+          <input id="order_file" name="order_file" type="file" accept=".txt,.csv">
+          <div class="file-face" id="order_face">
+            <span class="icon">🧾</span><span class="text">.txt / .csv 파일 선택</span>
+          </div>
+        </div>
+
+        <button type="submit">업로드 후 실행</button>
+      </div>
     </form>
 
-    <h3>처리 결과</h3>
-    <pre id="result">아직 실행 전입니다.</pre>
+    <div class="card">
+      <div class="result-head">
+        <h2>처리 결과</h2>
+        <span class="status" id="status">대기</span>
+      </div>
+      <pre id="result">아직 실행 전입니다.</pre>
+    </div>
+
+    <footer>채소팜 · 거래명세서 통합 처리기</footer>
   </div>
 
   <script>
     const form = document.getElementById('upload-form');
     const result = document.getElementById('result');
+    const statusEl = document.getElementById('status');
+
+    // 파일 선택 시 파일명 표시 (표시용, 동작에는 영향 없음)
+    function bindFileFace(inputId, faceId, placeholder) {
+      const input = document.getElementById(inputId);
+      const face = document.getElementById(faceId);
+      input.addEventListener('change', () => {
+        const f = input.files && input.files[0];
+        if (f) {
+          face.classList.add('picked');
+          face.querySelector('.text').innerHTML = '<span class="name"></span>';
+          face.querySelector('.name').textContent = f.name;
+        } else {
+          face.classList.remove('picked');
+          face.querySelector('.text').textContent = placeholder;
+        }
+      });
+    }
+    bindFileFace('html_file', 'html_face', '.html / .htm 파일 선택');
+    bindFileFace('order_file', 'order_face', '.txt / .csv 파일 선택');
+
+    function setStatus(kind, text) {
+      statusEl.className = 'status' + (kind ? ' ' + kind : '');
+      statusEl.textContent = text;
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -62,10 +273,12 @@
       const htmlFile = formData.get('html_file');
 
       if (!statementUrl && (!htmlFile || !htmlFile.name)) {
+        setStatus('error', '입력 필요');
         result.textContent = '오류: 거래명세서 링크를 입력하거나 HTML 파일을 올려 주세요.';
         return;
       }
 
+      setStatus('loading', '처리 중');
       result.textContent = statementUrl ? '거래명세서 링크 확인 중...' : '업로드 중...';
 
       try {
@@ -74,11 +287,14 @@
 
         try {
           const data = JSON.parse(text);
+          setStatus(response.ok ? 'ok' : 'error', response.ok ? '접수 완료' : '오류 ' + response.status);
           result.textContent = JSON.stringify(data, null, 2);
         } catch {
+          setStatus('error', '오류 ' + response.status);
           result.textContent = `오류 (${response.status})\n` + text;
         }
       } catch (err) {
+        setStatus('error', '연결 실패');
         result.textContent = '오류: ' + err.message;
       }
     });
